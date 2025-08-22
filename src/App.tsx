@@ -52,8 +52,10 @@ const App: React.FC = () => {
                   <h1>AI Calendar Assistant</h1>
                   <button onClick={handleLogout}>Logout</button>
                 </header>
-                <Calendar token={token!} />
-                <ChatAssistant token={token!} />
+                <div className="main-content">
+                  <Calendar token={token!} />
+                  <ChatAssistant token={token!} />
+                </div>
               </div>
             ) : (
               <Navigate to="/login" />
