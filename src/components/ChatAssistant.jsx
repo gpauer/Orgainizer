@@ -16,12 +16,12 @@ function ChatAssistant({ token }) {
     
     try {
       // First get the calendar events
-      const eventsResponse = await axios.get('/api/calendar/events', {
+      const eventsResponse = await axios.get('http://localhost:3001/api/calendar/events', {
         headers: { token }
       });
       
       // Send the query along with events to the AI
-      const aiResponse = await axios.post('/api/assistant/query', {
+      const aiResponse = await axios.post('http://localhost:3001/api/assistant/query', {
         query,
         events: eventsResponse.data
       });

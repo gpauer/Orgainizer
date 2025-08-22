@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const { OAuth2Client } = require('google-auth-library');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { google } = require('googleapis');
 
 // Initialize Express app
 const app = express();
@@ -68,7 +69,7 @@ app.post('/api/assistant/query', async (req, res) => {
   try {
     const { query, events } = req.body;
     
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
     
     const prompt = `
       You are a calendar assistant. The user has the following events:
