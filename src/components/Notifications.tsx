@@ -5,11 +5,11 @@ export interface Toast {
   message: string;
   type?: 'info' | 'success' | 'error' | 'warn';
   duration?: number;
+  actionLabel?: string;
+  onAction?: () => void;
 }
 
-interface NotificationsContextValue {
-  push: (t: Omit<Toast, 'id'>) => void;
-}
+interface NotificationsContextValue { push: (t: Omit<Toast, 'id'>) => void; }
 
 const NotificationsContext = createContext<NotificationsContextValue | null>(null);
 
@@ -41,7 +41,10 @@ export const NotificationsProvider: React.FC<{ children: React.ReactNode }> = ({
       <div className="toast-stack">
         {toasts.map(t => (
           <div key={t.id} className={`toast toast-${t.type}`}> 
-            <span>{t.message}</span>
+            <span style={{flex:1}}>{t.message}</span>
+            {t.onAction && t.actionLabel && (
+              <button className="toast-action" onClick={() => { t.onAction?.(); remove(t.id); }}>{t.actionLabel}</button>
+            )}
             <button className="toast-close" onClick={() => remove(t.id)} aria-label="Dismiss">×</button>
           </div>
         ))}

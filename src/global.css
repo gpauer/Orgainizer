@@ -140,3 +140,5 @@ header button:active { transform: translateY(1px); }
 .toast-warn { border-color:#d97706; }
 .toast-close { background:transparent; border:none; color: var(--text-dim); cursor:pointer; font-size:1rem; line-height:1; padding:2px 4px; border-radius:4px; }
 .toast-close:hover { background: var(--panel-alt); color: var(--text); }
+.toast-action { background: var(--accent); color:#fff; border:none; padding:4px 8px; font-size:.6rem; font-weight:600; border-radius:6px; cursor:pointer; text-transform:uppercase; letter-spacing:.5px; }
+.toast-action:hover { background: var(--accent-hover); }

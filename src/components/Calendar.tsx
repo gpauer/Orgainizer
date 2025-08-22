@@ -75,10 +75,50 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
     if (!selectedEvent) return;
     if (!window.confirm('Delete this event?')) return;
     try {
-  await axios.delete(`http://localhost:3001/api/calendar/events/${selectedEvent.id}`, { headers: { token } });
-      setEvents(prev => prev.filter(e => e.id !== selectedEvent.id));
+      const deleting = selectedEvent;
+      await axios.delete(`http://localhost:3001/api/calendar/events/${deleting.id}`, { headers: { token } });
+      setEvents(prev => prev.filter(e => e.id !== deleting.id));
       setSelectedEvent(null);
-      push({ type: 'success', message: 'Event deleted' });
+      let undone = false;
+      push({
+        type: 'success',
+        message: 'Event deleted',
+        actionLabel: 'Undo',
+        duration: 6000,
+        onAction: async () => {
+          if (undone) return;
+          undone = true;
+          try {
+            const response = await axios.post('http://localhost:3001/api/calendar/events', {
+              summary: deleting.title,
+              description: deleting.description,
+              location: deleting.location,
+              start: deleting.allDay && deleting.start ? { date: new Date(deleting.start).toISOString().slice(0,10) } : { dateTime: new Date(deleting.start).toISOString() },
+              end: deleting.allDay && deleting.end ? { date: new Date(deleting.end).toISOString().slice(0,10) } : { dateTime: new Date(deleting.end).toISOString() },
+              attendees: (deleting.attendees || []).map((a: any) => ({ email: a.email }))
+            }, { headers: { token } });
+            const ev = response.data;
+            setEvents(prev => ([...prev, {
+              id: ev.id,
+              title: ev.summary,
+              start: ev.start?.dateTime || ev.start?.date,
+              end: ev.end?.dateTime || ev.end?.date,
+              allDay: !ev.start?.dateTime,
+              extendedProps: {
+                description: ev.description || '',
+                location: ev.location || '',
+                organizer: ev.organizer || null,
+                attendees: ev.attendees || [],
+                raw: ev
+              }
+            }]));
+            push({ type: 'info', message: 'Event restored' });
+          } catch (err) {
+            console.error('Undo failed', err);
+            push({ type: 'error', message: 'Failed to restore event' });
+          }
+        }
+      });
     } catch (err) {
       console.error('Delete failed', err);
       push({ type: 'error', message: 'Failed to delete event' });
