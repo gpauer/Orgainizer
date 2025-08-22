@@ -4,6 +4,7 @@ import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
+import { useToasts } from './Notifications';
 
 interface CalendarProps {
   token: string;
@@ -21,6 +22,7 @@ interface GoogleEvent {
 }
 
 const Calendar: React.FC<CalendarProps> = ({ token }) => {
+  const { push } = useToasts();
   const [events, setEvents] = useState<any[]>([]);
   const [selectedEvent, setSelectedEvent] = useState<any | null>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -36,6 +38,7 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
   });
   const [editing, setEditing] = useState(false);
   const [editEvent, setEditEvent] = useState<any | null>(null);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (token) fetchEvents();
@@ -64,6 +67,7 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
       setEvents(formattedEvents);
     } catch (error) {
       console.error('Error fetching events:', error);
+      push({ type: 'error', message: 'Failed to load events' });
     }
   };
 
@@ -74,9 +78,10 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
   await axios.delete(`http://localhost:3001/api/calendar/events/${selectedEvent.id}`, { headers: { token } });
       setEvents(prev => prev.filter(e => e.id !== selectedEvent.id));
       setSelectedEvent(null);
+      push({ type: 'success', message: 'Event deleted' });
     } catch (err) {
       console.error('Delete failed', err);
-      alert('Failed to delete event');
+      push({ type: 'error', message: 'Failed to delete event' });
     }
   };
 
@@ -132,8 +137,16 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
           center: 'title',
             right: 'dayGridMonth,timeGridWeek,timeGridDay'
         }}
+        editable={true}
+        eventDurationEditable={true}
+        dragScroll={true}
         events={events}
         height="100%"
+        eventClassNames={(arg) => {
+          const classes: string[] = [];
+          if (updatingId && arg.event.id === updatingId) classes.push('updating');
+          return classes;
+        }}
         eventClick={(clickInfo) => {
           const e = clickInfo.event;
           const ext: any = e.extendedProps || {};
@@ -149,6 +162,42 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
             attendees: ext.attendees,
             raw: ext.raw
           });
+        }}
+        eventDrop={async (info) => {
+          const e = info.event;
+          if (!e.start || !e.end) return;
+          setUpdatingId(e.id);
+          try {
+            await axios.put(`http://localhost:3001/api/calendar/events/${e.id}` , {
+              summary: e.title,
+              start: e.allDay ? { date: e.start.toISOString().slice(0,10) } : { dateTime: e.start.toISOString() },
+              end: e.allDay ? { date: e.end.toISOString().slice(0,10) } : { dateTime: e.end.toISOString() }
+            }, { headers: { token } });
+          } catch (err) {
+            console.error('Move failed', err);
+            info.revert();
+            alert('Could not move event');
+          } finally {
+            setUpdatingId(null);
+          }
+        }}
+        eventResize={async (info) => {
+          const e = info.event;
+            if (!e.start || !e.end) return;
+            setUpdatingId(e.id);
+            try {
+              await axios.put(`http://localhost:3001/api/calendar/events/${e.id}` , {
+                summary: e.title,
+                start: e.allDay ? { date: e.start.toISOString().slice(0,10) } : { dateTime: e.start.toISOString() },
+                end: e.allDay ? { date: e.end.toISOString().slice(0,10) } : { dateTime: e.end.toISOString() }
+              }, { headers: { token } });
+            } catch (err) {
+              console.error('Resize failed', err);
+              info.revert();
+              alert('Could not resize event');
+            } finally {
+              setUpdatingId(null);
+            }
         }}
       />
       {selectedEvent && (
@@ -213,7 +262,7 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
               <form className="event-form" onSubmit={async e => {
                 e.preventDefault();
                 if (!newEvent.summary || !newEvent.date || !newEvent.startTime || !newEvent.endTime) return;
-        if (!validateTimes(newEvent.date, newEvent.startTime, newEvent.endTime)) { alert('End time must be after start time'); return; }
+  if (!validateTimes(newEvent.date, newEvent.startTime, newEvent.endTime)) { push({ type: 'warn', message: 'End time must be after start time' }); return; }
                 setCreating(true);
                 try {
                   const startISO = new Date(`${newEvent.date}T${newEvent.startTime}:00`).toISOString();
@@ -245,7 +294,7 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
                   setNewEvent({ summary: '', date: '', startTime: '', endTime: '', location: '', description: '', attendees: '' });
                 } catch (err) {
                   console.error('Create failed', err);
-                  alert('Failed to create event');
+                  push({ type: 'error', message: 'Failed to create event' });
                 } finally {
                   setCreating(false);
                 }
@@ -300,7 +349,7 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
               <form className="event-form" onSubmit={async e => {
                 e.preventDefault();
                 if (!editEvent.summary || !editEvent.date || !editEvent.startTime || !editEvent.endTime) return;
-                if (!validateTimes(editEvent.date, editEvent.startTime, editEvent.endTime)) { alert('End time must be after start time'); return; }
+                if (!validateTimes(editEvent.date, editEvent.startTime, editEvent.endTime)) { push({ type: 'warn', message: 'End time must be after start time' }); return; }
                 setCreating(true);
                 try {
                   const startISO = new Date(`${editEvent.date}T${editEvent.startTime}:00`).toISOString();
@@ -332,7 +381,7 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
                   setSelectedEvent(null);
                 } catch (err) {
                   console.error('Update failed', err);
-                  alert('Failed to update event');
+                  push({ type: 'error', message: 'Failed to update event' });
                 } finally {
                   setCreating(false);
                 }

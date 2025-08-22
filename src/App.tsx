@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './components/Login';
 import Calendar from './components/Calendar';
 import ChatAssistant from './components/ChatAssistant';
+import { NotificationsProvider } from './components/Notifications';
 
 const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
@@ -29,8 +30,9 @@ const App: React.FC = () => {
   };
 
   return (
-    <BrowserRouter>
-      <Routes>
+    <NotificationsProvider>
+      <BrowserRouter>
+        <Routes>
         <Route
           path="/"
           element={
@@ -62,8 +64,9 @@ const App: React.FC = () => {
             )
           }
         />
-      </Routes>
-    </BrowserRouter>
+        </Routes>
+      </BrowserRouter>
+    </NotificationsProvider>
   );
 };
 
