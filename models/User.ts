@@ -1,5 +1,5 @@
-interface User {
-  _id: ObjectId;
+export interface User {
+  _id: any; // Replace with ObjectId from driver
   googleId: string;
   email: string;
   displayName: string;

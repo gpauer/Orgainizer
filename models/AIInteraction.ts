@@ -1,6 +1,6 @@
-interface AIInteraction {
-  _id: ObjectId;
-  userId: ObjectId;
+export interface AIInteraction {
+  _id: any; // Replace with ObjectId from your DB driver
+  userId: any; // Replace with ObjectId
   sessionId: string;
   query: string;
   response: string;
