@@ -1,0 +1,21 @@
+{
+	"folders": [
+		{
+			"name": "Orgainizer",
+			"path": "."
+		},
+		{
+			"name": "api",
+			"path": "../../Downloads/files/api"
+		},
+		{
+			"name": "components",
+			"path": "../../Downloads/files/components"
+		},
+		{
+			"name": "models",
+			"path": "../../Downloads/files/models"
+		}
+	],
+	"settings": {}
+}

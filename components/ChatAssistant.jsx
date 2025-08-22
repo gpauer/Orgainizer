@@ -1,0 +1,81 @@
+import React, { useState } from 'react';
+import axios from 'axios';
+
+function ChatAssistant({ token }) {
+  const [query, setQuery] = useState('');
+  const [conversation, setConversation] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!query.trim()) return;
+    
+    // Add user message to conversation
+    setConversation(prev => [...prev, { role: 'user', content: query }]);
+    setIsLoading(true);
+    
+    try {
+      // First get the calendar events
+      const eventsResponse = await axios.get('/api/calendar/events', {
+        headers: { token }
+      });
+      
+      // Send the query along with events to the AI
+      const aiResponse = await axios.post('/api/assistant/query', {
+        query,
+        events: eventsResponse.data
+      });
+      
+      // Add AI response to conversation
+      setConversation(prev => [...prev, { 
+        role: 'assistant', 
+        content: aiResponse.data.response 
+      }]);
+    } catch (error) {
+      console.error('Error with AI assistant:', error);
+      setConversation(prev => [...prev, { 
+        role: 'assistant', 
+        content: 'Sorry, I encountered an error. Please try again.' 
+      }]);
+    } finally {
+      setIsLoading(false);
+      setQuery('');
+    }
+  };
+  
+  return (
+    <div className="chat-container">
+      <div className="chat-messages">
+        {conversation.length === 0 ? (
+          <div className="welcome-message">
+            <h3>Hello! I'm your calendar assistant.</h3>
+            <p>Ask me about your schedule, to summarize your upcoming events, 
+            or for help planning your time.</p>
+          </div>
+        ) : (
+          conversation.map((msg, index) => (
+            <div key={index} className={`message ${msg.role}`}>
+              {msg.content}
+            </div>
+          ))
+        )}
+        {isLoading && <div className="message assistant loading">Thinking...</div>}
+      </div>
+      
+      <form onSubmit={handleSubmit} className="chat-input">
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Ask about your schedule..."
+          disabled={isLoading}
+        />
+        <button type="submit" disabled={isLoading || !query.trim()}>
+          Send
+        </button>
+      </form>
+    </div>
+  );
+}
+
+export default ChatAssistant;
