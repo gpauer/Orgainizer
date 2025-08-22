@@ -1,10 +1,12 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
 function Login({ onLogin }) {
+  const navigate = useNavigate();
   const handleGoogleLogin = async () => {
     try {
-      const response = await axios.get('/api/auth/google');
+      const response = await axios.get('http://localhost:3001/api/auth/google');
       window.location.href = response.data.url;
     } catch (error) {
       console.error('Login error:', error);
@@ -17,8 +19,9 @@ function Login({ onLogin }) {
     const code = urlParams.get('code');
     
     if (code) {
-      axios.get(`/api/auth/google/callback?code=${code}`)
+      axios.get(`http://localhost:3001/api/auth/google/callback?code=${code}`)
         .then(response => {
+          console.log('Received token:', response.data.tokens.access_token);
           onLogin(response.data.tokens.access_token);
         })
         .catch(error => {

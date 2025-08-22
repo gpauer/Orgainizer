@@ -14,10 +14,9 @@ function Calendar({ token }) {
   
   const fetchEvents = async () => {
     try {
-      const response = await axios.get('/api/calendar/events', {
+      const response = await axios.get('http://localhost:3001/api/calendar/events', {
         headers: { token }
       });
-      
       const formattedEvents = response.data.map(event => ({
         id: event.id,
         title: event.summary,
@@ -27,7 +26,6 @@ function Calendar({ token }) {
         description: event.description || '',
         location: event.location || '',
       }));
-      
       setEvents(formattedEvents);
     } catch (error) {
       console.error('Error fetching events:', error);
