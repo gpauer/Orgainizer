@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import axios from 'axios';
+import './ChatAssistant.css';
 
 interface ChatAssistantProps {
   token: string;
@@ -19,7 +20,12 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
     e.preventDefault();
     if (!query.trim()) return;
 
-    setConversation(prev => [...prev, { role: 'user', content: query }]);
+  // Prepare updated conversation immediately so we can send it in the request.
+    const newConversation: ConversationMessage[] = [
+      ...conversation,
+      { role: 'user', content: query }
+    ];
+    setConversation(newConversation);
     setIsLoading(true);
 
     try {
@@ -27,9 +33,12 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
         headers: { token }
       });
 
+      console.log("Context sent: " + JSON.stringify(newConversation));
+
       const aiResponse = await axios.post('http://localhost:3001/api/assistant/query', {
         query,
-        events: eventsResponse.data
+        events: eventsResponse.data,
+        context: newConversation
       });
 
       setConversation(prev => [
