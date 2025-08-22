@@ -59,7 +59,7 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
             right: 'dayGridMonth,timeGridWeek,timeGridDay'
         }}
         events={events}
-        height="auto"
+        height="100%"
       />
     </div>
   );

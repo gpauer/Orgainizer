@@ -2,7 +2,8 @@ import dotenv from 'dotenv';
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import { OAuth2Client } from 'google-auth-library';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI } from "@google/genai";
+
 import { google } from 'googleapis';
 
 dotenv.config();
@@ -33,7 +34,7 @@ const oAuth2Client = new OAuth2Client(
   REDIRECT_URI
 );
 
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY || '');
+const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY});
 
 app.get('/api/auth/google', (_req: Request, res: Response) => {
   try {
@@ -87,18 +88,28 @@ app.get('/api/calendar/events', async (req: Request, res: Response) => {
 
 app.post('/api/assistant/query', async (req: Request, res: Response) => {
   try {
-    const { query, events } = req.body as { query: string; events: any[] };
+    const { query, events, context} = req.body as { query: string; events: any[]; context : any};
     if (!GEMINI_API_KEY) {
       return res.status(500).json({ error: 'Gemini API key not configured' });
     }
 
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const groundingTool = {
+        googleSearch: {}
+    }
 
-    const prompt = `You are a calendar assistant. The user has the following events: ${JSON.stringify(events)}\n\nUser query: ${query}\n\nProvide a helpful response about their schedule. Only advise on scheduling and research applicable information. Do not create any events directly. If they want to add an event, provide the structured event information in JSON format that can be used to create a calendar event.`;
+    const config = {
+        tools: [groundingTool]
+    }
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
+    const prompt = `You are a calendar assistant. The user has the following events: ${JSON.stringify(events)}\n\nProvide a helpful response about their schedule. Only advise on scheduling and research applicable information. Do not create any events directly. If they want to add an event, provide the structured event information in JSON format that can be used to create a calendar event.\n\nYour conversation history with the user is:\n\n`;
+
+    const result = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: prompt + JSON.stringify(context),
+        config,
+    });
+    const response = await result;
+    const text = response.text;
 
     res.json({ response: text });
   } catch (error: any) {
