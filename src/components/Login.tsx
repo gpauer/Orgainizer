@@ -1,9 +1,14 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
-function Login({ onLogin }) {
+interface LoginProps {
+  onLogin: (token: string) => void;
+}
+
+const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const navigate = useNavigate();
+
   const handleGoogleLogin = async () => {
     try {
       const response = await axios.get('http://localhost:3001/api/auth/google');
@@ -12,23 +17,24 @@ function Login({ onLogin }) {
       console.error('Login error:', error);
     }
   };
-  
-  // Handle OAuth callback
-  React.useEffect(() => {
+
+  useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const code = urlParams.get('code');
-    
+
     if (code) {
-      axios.get(`http://localhost:3001/api/auth/google/callback?code=${code}`)
+      axios
+        .get(`http://localhost:3001/api/auth/google/callback?code=${code}`)
         .then(response => {
-          console.log('Received token:', response.data.tokens.access_token);
-          onLogin(response.data.tokens.access_token);
+          const accessToken = response.data.tokens.access_token as string;
+          onLogin(accessToken);
+          navigate('/calendar');
         })
         .catch(error => {
           console.error('Auth callback error:', error);
         });
     }
-  }, [onLogin]);
+  }, [onLogin, navigate]);
 
   return (
     <div className="login-container">
@@ -36,6 +42,6 @@ function Login({ onLogin }) {
       <button onClick={handleGoogleLogin}>Sign in with Google</button>
     </div>
   );
-}
+};
 
 export default Login;

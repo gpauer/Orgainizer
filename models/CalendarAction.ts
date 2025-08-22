@@ -1,4 +1,4 @@
-interface CalendarAction {
+export interface CalendarAction {
   action: 'create' | 'update' | 'delete' | 'recommend' | 'summarize';
   eventData?: {
     summary: string;

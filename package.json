@@ -4,11 +4,14 @@
     "@fullcalendar/interaction": "^6.1.19",
     "@fullcalendar/react": "^6.1.19",
     "@fullcalendar/timegrid": "^6.1.19",
+    "@fullcalendar/core": "^6.1.19",
     "@google/generative-ai": "^0.24.1",
     "@react-oauth/google": "^0.12.2",
     "axios": "^1.11.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.1",
+    "express": "^4.19.2",
+    "ajv": "^8.17.1",
     "google-auth-library": "^10.2.1",
     "googleapis": "^157.0.0",
     "react": "^19.1.1",
@@ -18,11 +21,20 @@
   },
   "scripts": {
     "start": "react-scripts start",
-    "server": "node server.js",
-    "dev": "concurrently \"npm run server\" \"npm run start\""
+    "server:dev": "nodemon --watch server.ts --exec ts-node server.ts",
+    "typecheck": "tsc --noEmit",
+    "dev": "concurrently \"npm run server:dev\" \"npm run start\""
   },
   "devDependencies": {
-    "concurrently": "^8.2.2"
+    "concurrently": "^8.2.2",
+    "typescript": "^5.6.2",
+    "ts-node": "^10.9.2",
+    "nodemon": "^3.1.4",
+    "@types/node": "^20.14.11",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@types/express": "^4.17.21",
+  "@types/cors": "^2.8.17"
   },
   "browserslist": {
     "production": [

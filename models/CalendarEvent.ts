@@ -1,4 +1,4 @@
-interface CalendarEvent {
+export interface CalendarEvent {
   id: string;
   googleEventId: string;
   title: string;
