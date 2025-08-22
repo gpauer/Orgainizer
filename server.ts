@@ -86,6 +86,78 @@ app.get('/api/calendar/events', async (req: Request, res: Response) => {
   }
 });
 
+// Create a calendar event
+app.post('/api/calendar/events', async (req: Request, res: Response) => {
+  try {
+    const token = req.headers['token'] as string | undefined;
+    if (!token) return res.status(401).json({ error: 'Missing token header' });
+    oAuth2Client.setCredentials({ access_token: token });
+    const { summary, description, location, start, end, attendees } = req.body as any;
+    if (!summary || !start || !end) {
+      return res.status(400).json({ error: 'summary, start, and end are required' });
+    }
+    const calendar = google.calendar({ version: 'v3', auth: oAuth2Client });
+    const created = await calendar.events.insert({
+      calendarId: 'primary',
+      requestBody: {
+        summary,
+        description,
+        location,
+        start,
+        end,
+        attendees
+      }
+    });
+    res.status(201).json(created.data);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Update (patch) a calendar event
+app.put('/api/calendar/events/:id', async (req: Request, res: Response) => {
+  try {
+    const token = req.headers['token'] as string | undefined;
+    if (!token) return res.status(401).json({ error: 'Missing token header' });
+    oAuth2Client.setCredentials({ access_token: token });
+    const { id } = req.params;
+    const { summary, description, location, start, end, attendees } = req.body as any;
+    if (!id) return res.status(400).json({ error: 'Missing event id' });
+    const calendar = google.calendar({ version: 'v3', auth: oAuth2Client });
+    const updated = await calendar.events.patch({
+      calendarId: 'primary',
+      eventId: id,
+      requestBody: {
+        summary,
+        description,
+        location,
+        start,
+        end,
+        attendees
+      }
+    });
+    res.json(updated.data);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Delete a calendar event
+app.delete('/api/calendar/events/:id', async (req: Request, res: Response) => {
+  try {
+    const token = req.headers['token'] as string | undefined;
+    if (!token) return res.status(401).json({ error: 'Missing token header' });
+    oAuth2Client.setCredentials({ access_token: token });
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ error: 'Missing event id' });
+    const calendar = google.calendar({ version: 'v3', auth: oAuth2Client });
+    await calendar.events.delete({ calendarId: 'primary', eventId: id });
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 app.post('/api/assistant/query', async (req: Request, res: Response) => {
   try {
     const { query, events, context} = req.body as { query: string; events: any[]; context : any};
