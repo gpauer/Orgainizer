@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import './ChatAssistant.css';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Components } from 'react-markdown';
 
 interface ChatAssistantProps {
   token: string;
@@ -75,11 +78,27 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
             </p>
           </div>
         ) : (
-          conversation.map((msg, index) => (
-            <div key={index} className={`message ${msg.role}`}>
-              {msg.content}
-            </div>
-          ))
+          conversation.map((msg, index) => {
+            const mdComponents: Components = {
+              a: ({node, ...props}) => <a {...props} target="_blank" rel="noopener noreferrer" />,
+              code: ({className, children, ...props}: any) => {
+                const inline = (props as any).inline;
+                return (
+                  <code className={inline ? 'inline-code' : `code-block ${className || ''}`.trim()} {...props}>{children}</code>
+                );
+              },
+              ul: ({node, ...props}) => <ul className="msg-list" {...props} />,
+              ol: ({node, ...props}) => <ol className="msg-list" {...props} />,
+              blockquote: ({node, ...props}) => <blockquote className="msg-quote" {...props} />
+            };
+            return (
+              <div key={index} className={`message ${msg.role}`}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                  {msg.content}
+                </ReactMarkdown>
+              </div>
+            );
+          })
         )}
         {isLoading && <div className="message assistant loading">Thinking...</div>}
       </div>

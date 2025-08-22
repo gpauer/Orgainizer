@@ -69,6 +69,17 @@
   font-style: italic;
 }
 
+/* Markdown formatting inside messages */
+.message .inline-code { background:#1f2730; padding:2px 5px; border-radius:4px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 0.85em; }
+.message .code-block { display:block; background:#1f2730; padding:10px 12px; border-radius:8px; overflow:auto; margin:6px 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size:0.78rem; line-height:1.4; }
+.message .msg-list { margin:6px 0 6px 20px; padding:0; }
+.message .msg-list li { margin:4px 0; }
+.message .msg-quote { margin:6px 0; padding:6px 10px; border-left:4px solid #3b82f6; background:#1d252d; border-radius:4px; color:#cdd6e0; }
+.message a { color:#60a5fa; text-decoration:underline; }
+.message a:hover { color:#93c5fd; }
+.message h1,.message h2,.message h3 { margin:10px 0 6px; font-size:1rem; }
+.message p { margin:6px 0; }
+
 .chat-input {
   display: flex;
   gap: 10px;
