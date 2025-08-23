@@ -12,7 +12,8 @@ dotenv.config();
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+// Allow larger audio payloads for transcription (up to ~20MB)
+app.use(express.json({ limit: '20mb' }));
 
 // Ensure required env vars
 const {
@@ -390,6 +391,28 @@ app.post('/api/assistant/tts', requireValidToken, async (req: Request, res: Resp
       finalMime = 'audio/wav';
     }
     res.json({ audio: finalB64, mimeType: finalMime, originalMimeType: mime || null, voice });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Speech-To-Text transcription endpoint
+// POST /api/assistant/transcribe { audio: base64WavOrPcm, mimeType?: string }
+// Accepts short recordings (<= ~60s). Returns { text }
+app.post('/api/assistant/transcribe', requireValidToken, async (req: Request, res: Response) => {
+  try {
+    if (!GEMINI_API_KEY) return res.status(500).json({ error: 'Gemini API key not configured' });
+    const { audio, mimeType } = req.body as { audio?: string; mimeType?: string };
+    if (!audio) return res.status(400).json({ error: 'Missing audio' });
+    // Gemini expects inlineData (base64) for audio content parts.
+    const result: any = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: [
+        { role: 'user', parts: [ { inlineData: { data: audio, mimeType: mimeType || 'audio/wav' } }, { text: 'Transcribe the preceding audio accurately. Return only the raw transcript.' } ] }
+      ]
+    });
+    const text = (result?.text || '').trim();
+    res.json({ text });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }

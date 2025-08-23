@@ -30,6 +30,15 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
   const [geminiAudio, setGeminiAudio] = useState<Record<number, GeminiAudioState>>({});
   const [selectedVoice, setSelectedVoice] = useState('Kore');
   const [muted, setMuted] = useState(false);
+  // Recording / transcription state
+  const [recordingAuto, setRecordingAuto] = useState(false);      // mic that auto sends after transcription
+  const [recordingAppend, setRecordingAppend] = useState(false);  // mic that appends text to input only
+  const [transcribing, setTranscribing] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const silenceTimerRef = useRef<any>(null);
+  const hadSoundRef = useRef(false);
+  const audioStreamRef = useRef<MediaStream | null>(null);
   const GEMINI_VOICES = [
     'Kore','Puck','Zephyr','Charon','Fenrir','Leda','Orus','Aoede','Callirrhoe','Autonoe','Enceladus','Iapetus','Umbriel','Algieba','Despina','Erinome','Algenib','Rasalgethi','Laomedeia','Achernar','Alnilam','Schedar','Gacrux','Pulcherrima','Achird','Zubenelgenubi','Vindemiatrix','Sadachbia','Sadaltager','Sulafat'
   ];
@@ -271,25 +280,29 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
+    await sendQuery(query.trim());
+  };
 
-  // Prepare updated conversation immediately so we can send it in the request.
+  // Reusable send function (used by form and auto voice)
+  const sendQuery = async (text: string) => {
+    if (!text || isLoading) return;
+    // optimistic user message
     const newConversation: ConversationMessage[] = [
       ...conversation,
-      { role: 'user', content: query }
+      { role: 'user', content: text }
     ];
     setConversation(newConversation);
     setIsLoading(true);
-
+    setQuery('');
     try {
       const eventsResponse = await api.get('/calendar/events');
-      // Start streaming request
-  setConversation(prev => ([...prev, { role: 'assistant', content: '' }]));
-  // Reset segmentation state for new assistant response
-  segmentStateRef.current = { processedChars: 0, lastEmit: Date.now() };
+      // assistant placeholder
+      setConversation(prev => ([...prev, { role: 'assistant', content: '' }]));
+      segmentStateRef.current = { processedChars: 0, lastEmit: Date.now() };
       const resp = await fetch('http://localhost:3001/api/assistant/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', token },
-        body: JSON.stringify({ query, events: eventsResponse.data, context: newConversation })
+        body: JSON.stringify({ query: text, events: eventsResponse.data, context: newConversation })
       });
       if (!resp.body) throw new Error('No stream body');
       const reader = resp.body.getReader();
@@ -302,7 +315,6 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
           return copy;
         });
       };
-
       async function executeActions(actions: any[]) {
         for (const action of actions) {
           try {
@@ -310,10 +322,8 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
               await api.post('/calendar/events', action.event);
               assistantText += `\n\n✅ Created event: ${action.event.summary}`;
             } else if (action.action === 'update_event') {
-              // Attempt to resolve id
               let id = action.target?.id;
               if (!id) {
-                // Try to find by summary + start
                 const events = eventsResponse.data as any[];
                 const match = events.find(ev => (
                   (action.target?.summary && ev.summary === action.target.summary) &&
@@ -344,7 +354,6 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
                 assistantText += `\n\n⚠ Could not resolve event to delete.`;
               }
             }
-            // Notify calendar to refresh after each action
             window.dispatchEvent(new Event('calendar:refresh'));
           } catch (err: any) {
             assistantText += `\n\n❌ Action failed (${action.action}): ${err.message}`;
@@ -352,9 +361,8 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
           applyAssistantText();
         }
       }
-
       let buffer = '';
-  while (true) {
+      while (true) {
         const { value, done } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
@@ -362,45 +370,149 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
         buffer = lines.pop() || '';
         for (const line of lines) {
           const trimmed = line.trim();
-            if (!trimmed.startsWith('data:')) continue;
-            const payload = trimmed.substring(5).trim();
-            if (payload === '[DONE]') {
-              // Flush any remaining segment on completion
-              const currentIndex = conversation.length; // assistant placeholder at end
-              considerEmitSegments(currentIndex - 1, stripMarkdown(assistantText), true);
-              buffer = '';
-              break;
+          if (!trimmed.startsWith('data:')) continue;
+          const payload = trimmed.substring(5).trim();
+          if (payload === '[DONE]') {
+            const currentIndex = conversation.length; // assistant placeholder index offset
+            considerEmitSegments(currentIndex - 1, stripMarkdown(assistantText), true);
+            buffer = '';
+            break;
+          }
+          try {
+            const json = JSON.parse(payload);
+            if (json.delta) {
+              assistantText += json.delta;
+              applyAssistantText();
+              const currentIndex = conversation.length;
+              considerEmitSegments(currentIndex - 1, stripMarkdown(assistantText));
+            } else if (json.type === 'actions' && Array.isArray(json.actions)) {
+              assistantText += '\n\nProcessing requested calendar actions...';
+              applyAssistantText();
+              await executeActions(json.actions);
+            } else if (json.error) {
+              assistantText += `\n\nError: ${json.error}`;
+              applyAssistantText();
             }
-            try {
-              const json = JSON.parse(payload);
-              if (json.delta) {
-                assistantText += json.delta;
-                applyAssistantText();
-                // Consider emitting partial segment for TTS
-                const currentIndex = conversation.length; // assistant placeholder at end
-                considerEmitSegments(currentIndex - 1, stripMarkdown(assistantText));
-              } else if (json.type === 'actions' && Array.isArray(json.actions)) {
-                assistantText += '\n\nProcessing requested calendar actions...';
-                applyAssistantText();
-                await executeActions(json.actions);
-              } else if (json.error) {
-                assistantText += `\n\nError: ${json.error}`;
-                applyAssistantText();
-              }
-            } catch {
-              // ignore
-            }
+          } catch { /* ignore */ }
         }
       }
-  // Finished streaming. (Full-message TTS no longer auto-triggered here; sentence-level already queued.)
     } catch (error) {
       console.error('Error with AI assistant:', error);
       setConversation(prev => ([...prev, { role: 'assistant', content: 'Sorry, I encountered an error. Please try again.' }]));
     } finally {
       setIsLoading(false);
-      setQuery('');
     }
   };
+
+  // ---- Voice Recording Logic ----
+  async function startRecording(kind: 'auto' | 'append') {
+    if (recordingAuto || recordingAppend || transcribing) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioStreamRef.current = stream;
+      const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      recordedChunksRef.current = [];
+      hadSoundRef.current = false;
+      mr.ondataavailable = e => { if (e.data.size > 0) recordedChunksRef.current.push(e.data); };
+      mr.onstop = async () => {
+        clearTimeout(silenceTimerRef.current);
+        stream.getTracks().forEach(t => t.stop());
+        if (!recordedChunksRef.current.length) { resetRecordingState(); return; }
+        setTranscribing(true);
+        try {
+          const blob = new Blob(recordedChunksRef.current, { type: 'audio/webm' });
+          const arrayBuffer = await blob.arrayBuffer();
+          const base64 = arrayBufferToBase64(arrayBuffer);
+          const resp = await fetch('http://localhost:3001/api/assistant/transcribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', token },
+            body: JSON.stringify({ audio: base64, mimeType: 'audio/webm' })
+          });
+          const data = await resp.json();
+          const text: string = (data.text || '').trim();
+          if (text) {
+            if (kind === 'append') {
+              // Append into current input caret position
+              setQuery(q => (q ? (q.endsWith(' ') ? q + text : q + ' ' + text) : text));
+            } else {
+              // Auto send transcript as user message
+              setQuery(text);
+              // slight delay to allow React to set state before submit
+              setTimeout(() => {
+                const form = document.querySelector('.chat-input form') as HTMLFormElement | null;
+              }, 0);
+              // Directly send the transcript
+              sendQuery(text);
+            }
+          }
+        } catch (err) {
+          console.error('Transcription failed', err);
+        } finally {
+          setTranscribing(false);
+          resetRecordingState();
+        }
+      };
+      mr.start(250); // timeslice
+      mediaRecorderRef.current = mr;
+      if (kind === 'auto') setRecordingAuto(true); else setRecordingAppend(true);
+      // Basic silence stop using analyser
+      const ctx = new AudioContext();
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      source.connect(analyser);
+      const data = new Uint8Array(analyser.fftSize);
+      const SILENCE_MS = 2500;
+      const SILENCE_THRESHOLD = 8; // very low energy threshold
+      let lastSoundTs = Date.now();
+      function check() {
+        analyser.getByteTimeDomainData(data);
+        // compute simple peak deviation from midpoint (128)
+        let peak = 0;
+        for (let i=0;i<data.length;i+=16) { // subsample
+          const dev = Math.abs(data[i] - 128);
+          if (dev > peak) peak = dev;
+        }
+        if (peak > SILENCE_THRESHOLD) {
+          hadSoundRef.current = true;
+          lastSoundTs = Date.now();
+        }
+        if (hadSoundRef.current && Date.now() - lastSoundTs > SILENCE_MS) {
+          mr.stop();
+          ctx.close();
+          return;
+        }
+        if (mr.state !== 'inactive') requestAnimationFrame(check);
+      }
+      requestAnimationFrame(check);
+      // Safety max length 30s
+      silenceTimerRef.current = setTimeout(() => { if (mr.state !== 'inactive') mr.stop(); ctx.close(); }, 30000);
+    } catch (err) {
+      console.error('Mic start failed', err);
+      resetRecordingState();
+    }
+  }
+
+  function stopRecording() {
+    try { mediaRecorderRef.current?.stop(); } catch {/* ignore */}
+  }
+
+  function resetRecordingState() {
+    setRecordingAuto(false);
+    setRecordingAppend(false);
+    mediaRecorderRef.current = null;
+    recordedChunksRef.current = [];
+    clearTimeout(silenceTimerRef.current);
+    const s = audioStreamRef.current; if (s) s.getTracks().forEach(t => t.stop());
+    audioStreamRef.current = null;
+  }
+
+  function arrayBufferToBase64(buf: ArrayBuffer): string {
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    for (let i=0;i<bytes.length;i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  }
 
   return (
     <div className="chat-container">
@@ -482,6 +594,25 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
           placeholder="Ask about your schedule..."
           disabled={isLoading}
         />
+        {/* Auto-send microphone */}
+        <button
+          type="button"
+          className="tts-btn"
+          disabled={isLoading || transcribing || recordingAppend}
+          title={recordingAuto ? 'Stop & transcribe (auto send)' : 'Hold a voice note (auto send after silence)'}
+          onClick={() => recordingAuto ? stopRecording() : startRecording('auto')}
+          style={{ marginLeft: '0.5rem' }}
+        >{recordingAuto ? '⏺️ Stop' : '🎙️ Send'}</button>
+        {/* Append-only dictation mic */}
+        <button
+          type="button"
+          className="tts-btn"
+          disabled={isLoading || transcribing || recordingAuto}
+          title={recordingAppend ? 'Stop & transcribe (append to input)' : 'Dictate and append to text box'}
+          onClick={() => recordingAppend ? stopRecording() : startRecording('append')}
+          style={{ marginLeft: '0.25rem' }}
+        >{recordingAppend ? '⏺️ Add' : '🗣️ Dictate'}</button>
+        {transcribing && <span style={{ fontSize: '0.7rem', marginLeft: '0.3rem' }}>Transcribing...</span>}
   {/* Auto browser speech toggle removed */}
         <button
           type="button"
