@@ -90,7 +90,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
     if (!msg || msg.role !== 'assistant' || !msg.content.trim()) return;
     try {
       setGeminiAudio(prev => ({ ...prev, [index]: { ...(prev[index]||{}), loading: true, error: undefined, autoplay: true } }));
-  const resp = await fetch(`${API_ORIGIN}/assistant/tts/stream`, {
+  const resp = await fetch(`${API_ORIGIN}/api/assistant/tts/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', token },
         body: JSON.stringify({ text: stripMarkdown(msg.content).slice(0, 6000), voiceName: selectedVoice })
@@ -177,7 +177,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
     try {
       // Mark loading state (streaming)
       setGeminiAudio(prev => ({ ...prev, [index]: { ...(prev[index]||{}), loading: true, autoplay: true } }));
-  const resp = await fetch(`${API_ORIGIN}/assistant/tts/stream`, {
+  const resp = await fetch(`${API_ORIGIN}/api/assistant/tts/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', token },
         body: JSON.stringify({ text, voiceName: selectedVoice })
@@ -329,7 +329,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
       }
       setConversation(prev => ([...prev, { role: 'assistant', content: '' }]));
       segmentStateRef.current = { processedChars: 0, lastEmit: Date.now() };
-  const resp = await fetch(`${API_ORIGIN}/assistant/stream`, {
+  const resp = await fetch(`${API_ORIGIN}/api/assistant/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', token },
         body: JSON.stringify({ query: text, events: eventsPayload, context: newConversation })
@@ -464,7 +464,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
           const blob = new Blob(recordedChunksRef.current, { type: 'audio/webm' });
           const arrayBuffer = await blob.arrayBuffer();
           const base64 = arrayBufferToBase64(arrayBuffer);
-          const resp = await fetch(`${API_ORIGIN}/assistant/transcribe`, {
+          const resp = await fetch(`${API_ORIGIN}/api/assistant/transcribe`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', token },
             body: JSON.stringify({ audio: base64, mimeType: 'audio/webm' })
