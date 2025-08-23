@@ -153,7 +153,7 @@ export function createApp() {
       const config = { tools: [groundingTool] } as any;
       const actionSchema = `Action JSON schema (return ONLY when user explicitly asks to change calendar):\n\n{\n  "action": "create_event" | "update_event" | "delete_event",\n  "event": { "summary": string, "description?": string, "location?": string, "start": {"dateTime"|"date": string}, "end": {"dateTime"|"date": string}, "attendees?": [{"email": string}] },\n  "target": { "id?": string, "summary?": string, "start?": string },\n  "updates?": { "summary?": string, "description?": string, "location?": string, "start?": {"dateTime"|"date": string}, "end?": {"dateTime"|"date": string} }\n}`;
       const prompt = `You are a calendar assistant. Current events: ${JSON.stringify(events)}\n\n${actionSchema}\nProvide a helpful natural language response first. Conversation history follows:\n\n`;
-      const result: any = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt + JSON.stringify(context) });
+      const result: any = await ai.models.generateContent({ model: process.env.GEMINI_REALTIME_MODEL ?? "", contents: prompt + JSON.stringify(context) });
       const text = result.text || '';
       const actions = extractActionsFromText(text);
       let sanitized = text.replace(/```json[\s\S]*?```/g, '')
@@ -178,7 +178,7 @@ export function createApp() {
       const prompt = `${systemInstructions}\nToday: ${isoToday}\nUser query: ${query}\nConversation (truncated): ${JSON.stringify((context||[]).slice(-6))}`;
       let jsonText = '';
       try {
-        const result: any = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt });
+        const result: any = await ai.models.generateContent({ model: process.env.GEMINI_REALTIME_MODEL ?? '', contents: prompt });
         jsonText = (result?.text || '').trim();
       } catch (err:any) {
         return res.json({ ranges: [], union: { start: isoToday, end: isoToday }, strategy: 'fallback', source: 'error' });
@@ -198,7 +198,7 @@ export function createApp() {
       if (!text || !text.trim()) return res.status(400).json({ error: 'Missing text' });
       const voice = (voiceName || 'Kore').trim();
       const result: any = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-preview-tts',
+        model: process.env.GEMENI_TTS_MODEL ?? '',
         contents: text.trim(),
         config: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } }
       });
@@ -218,7 +218,7 @@ export function createApp() {
       const { audio, mimeType } = req.body as { audio?: string; mimeType?: string };
       if (!audio) return res.status(400).json({ error: 'Missing audio' });
       const result: any = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: process.env.GEMINI_REALTIME_MODEL ?? '',
         contents: [ { role: 'user', parts: [ { inlineData: { data: audio, mimeType: mimeType || 'audio/wav' } }, { text: 'Transcribe the preceding audio accurately. Return only the raw transcript.' } ] } ]
       });
       const text = (result?.text || '').trim();
@@ -238,7 +238,7 @@ export function createApp() {
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
       const prompt = `You are a calendar assistant. Events: ${JSON.stringify(events)}\nHistory: ${JSON.stringify(context)}`;
-      const result: any = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt + '\nUser query: ' + query });
+      const result: any = await ai.models.generateContent({ model: process.env.GEMINI_REALTIME_MODEL ?? '', contents: prompt + '\nUser query: ' + query });
       const fullText = result.text || '';
       const actions = extractActionsFromText(fullText);
       let sanitized = fullText.replace(/```json[\s\S]*?```/g, '')
