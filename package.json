@@ -23,6 +23,7 @@
     "remark-gfm": "^4.0.1"
   },
   "scripts": {
+    "setup": "npm install --legacy-peer-deps",
     "start": "react-scripts start",
     "server:dev": "nodemon --watch server.ts --exec ts-node server.ts",
     "typecheck": "tsc --noEmit",
