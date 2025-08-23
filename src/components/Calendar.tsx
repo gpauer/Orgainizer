@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import api from '../api/http';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
@@ -39,9 +39,16 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
   const [editing, setEditing] = useState(false);
   const [editEvent, setEditEvent] = useState<any | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [loadedWindow, setLoadedWindow] = useState<{ start: Date; end: Date } | null>(null);
+  const calendarRef = useRef<any>(null);
 
   useEffect(() => {
-    if (token) fetchEvents();
+    if (token) {
+      const now = new Date();
+      const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const end = new Date(now.getFullYear(), now.getMonth() + 7, 0, 23,59,59,999); // ~6 months ahead inclusive
+      fetchEvents({ start, end }).then(() => setLoadedWindow({ start, end }));
+    }
   }, [token]);
 
   // Listen for external refresh requests (e.g., ChatAssistant actions)
@@ -51,14 +58,23 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
     return () => window.removeEventListener('calendar:refresh', refresh);
   }, [token]);
 
-  const fetchEvents = async () => {
+  const fetchEvents = async (range?: { start: Date; end: Date }) => {
+    // If a range is provided and we already fully cover it in loadedWindow, skip network.
+    if (range && loadedWindow) {
+      if (range.start >= loadedWindow.start && range.end <= loadedWindow.end) {
+        return; // cached by virtue of existing merged events
+      }
+    }
     try {
-  const response = await api.get<GoogleEvent[]>('/calendar/events');
-      const formattedEvents = response.data.map(event => ({
+      const params = range ? `?start=${encodeURIComponent(range.start.toISOString())}&end=${encodeURIComponent(range.end.toISOString())}` : '';
+      const response = await api.get<any>(`/calendar/events${params}`);
+      const data = Array.isArray(response.data) ? { events: response.data } : response.data; // backward compat
+      const list = (data.events || data);
+      const formattedEvents = list.map((event: any) => ({
         id: event.id,
         title: event.summary,
         start: event.start.dateTime || event.start.date,
-        end: event.end.dateTime || event.end.date,
+        end: event.end?.dateTime || event.end?.date,
         allDay: !event.start.dateTime,
         extendedProps: {
           description: event.description || '',
@@ -68,7 +84,20 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
           raw: event
         }
       }));
-      setEvents(formattedEvents);
+      setEvents(prev => {
+        const map = new Map(prev.map(e => [e.id, e] as const));
+        formattedEvents.forEach((ev: any) => map.set(ev.id, ev));
+        return Array.from(map.values());
+      });
+      if (range) {
+        setLoadedWindow(prev => {
+          if (!prev) return { start: range.start, end: range.end };
+            return {
+              start: range.start < prev.start ? range.start : prev.start,
+              end: range.end > prev.end ? range.end : prev.end
+            };
+        });
+      }
     } catch (error) {
       console.error('Error fetching events:', error);
       push({ type: 'error', message: 'Failed to load events' });
@@ -174,6 +203,7 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
         <button className="mini-btn" onClick={() => setShowCreate(true)}>＋ Add Event</button>
       </div>
       <FullCalendar
+        ref={calendarRef}
         plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
         initialView="timeGridWeek"
         headerToolbar={{
@@ -242,6 +272,38 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
             } finally {
               setUpdatingId(null);
             }
+        }}
+        datesSet={(arg) => {
+          if (token) {
+            const viewStart = arg.start; // inclusive
+            const viewEndExclusive = arg.end; // exclusive
+            const viewEnd = new Date(viewEndExclusive.getTime() - 1);
+            // Auto-extend logic
+            if (loadedWindow) {
+              const bufferDays = 14; // threshold to trigger extension
+              const msPerDay = 86400000;
+              const nearEnd = (loadedWindow.end.getTime() - viewEnd.getTime()) / msPerDay < bufferDays;
+              const nearStart = (viewStart.getTime() - loadedWindow.start.getTime()) / msPerDay < bufferDays;
+              const extensions: Promise<any>[] = [];
+              if (nearEnd) {
+                const newEnd = new Date(loadedWindow.end.getFullYear(), loadedWindow.end.getMonth() + 4, 0, 23,59,59,999); // extend ~3 extra months (using +4 then day 0)
+                extensions.push(fetchEvents({ start: new Date(loadedWindow.end.getTime() - msPerDay * 7), end: newEnd }));
+              }
+              if (nearStart) {
+                const newStart = new Date(loadedWindow.start.getFullYear(), loadedWindow.start.getMonth() - 4, 1);
+                extensions.push(fetchEvents({ start: newStart, end: new Date(loadedWindow.start.getTime() + msPerDay * 7) }));
+              }
+              if (!extensions.length) {
+                // Just ensure current view window events loaded (in case initial preload skipped)
+                fetchEvents({ start: viewStart, end: viewEnd });
+              }
+            } else {
+              fetchEvents({ start: viewStart, end: viewEnd });
+            }
+          }
+        }}
+        viewDidMount={(arg) => {
+          if (token) fetchEvents({ start: arg.view.activeStart, end: new Date(arg.view.activeEnd.getTime() - 1) });
         }}
       />
       {selectedEvent && (
