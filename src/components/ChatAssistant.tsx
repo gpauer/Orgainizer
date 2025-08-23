@@ -82,7 +82,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
   }
 
   const API_ORIGIN = process.env.NODE_ENV === 'production'
-    ? '' // relative
+    ? '/api' // relative
     : (process.env.REACT_APP_API_BASE || 'http://localhost:3001/api');
 
   async function streamGeminiTTS(index: number) {
