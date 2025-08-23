@@ -44,6 +44,13 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
     if (token) fetchEvents();
   }, [token]);
 
+  // Listen for external refresh requests (e.g., ChatAssistant actions)
+  useEffect(() => {
+    const refresh = () => { if (token) fetchEvents(); };
+    window.addEventListener('calendar:refresh', refresh);
+    return () => window.removeEventListener('calendar:refresh', refresh);
+  }, [token]);
+
   const fetchEvents = async () => {
     try {
   const response = await api.get<GoogleEvent[]>('/calendar/events');

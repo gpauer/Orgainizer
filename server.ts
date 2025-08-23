@@ -204,7 +204,16 @@ app.post('/api/assistant/query', requireValidToken, async (req: Request, res: Re
         tools: [groundingTool]
     }
 
-    const prompt = `You are a calendar assistant. The user has the following events: ${JSON.stringify(events)}\n\nProvide a helpful response about their schedule. Only advise on scheduling and research applicable information. Do not create any events directly. If they want to add an event, provide the structured event information in JSON format that can be used to create a calendar event.\n\nYour conversation history with the user is:\n\n`;
+    const actionSchema = `Action JSON schema (return ONLY when user explicitly asks to change calendar):\n\n{
+  "action": "create_event" | "update_event" | "delete_event",
+  // create_event
+  "event": { "summary": string, "description?": string, "location?": string, "start": {"dateTime"|"date": string}, "end": {"dateTime"|"date": string}, "attendees?": [{"email": string}] },
+  // update/delete identifying target (prefer id if available from context events, else match details)
+  "target": { "id?": string, "summary?": string, "start?": string },
+  // update_event new values (same shape as event but partial)
+  "updates?": { "summary?": string, "description?": string, "location?": string, "start?": {"dateTime"|"date": string}, "end?": {"dateTime"|"date": string} }
+}\n\nRules: 1) Only output one JSON object per action. 2) For multiple actions, output them each in separate JSON code fences. 3) If user is only asking a question, DO NOT output action JSON.`;
+    const prompt = `You are a calendar assistant. Current events: ${JSON.stringify(events)}\n\n${actionSchema}\nProvide a helpful natural language response first. Conversation history follows:\n\n`;
 
     const result = await ai.models.generateContent({
         model: "gemini-2.5-flash",
@@ -212,9 +221,17 @@ app.post('/api/assistant/query', requireValidToken, async (req: Request, res: Re
         config,
     });
     const response = await result;
-    const text = response.text;
-
-    res.json({ response: text });
+    const text = response.text || '';
+    const actions = extractActionsFromText(text);
+    // Remove any fenced JSON blocks entirely from user-visible response
+    let sanitized = text.replace(/```json[\s\S]*?```/g, '')
+                        .replace(/```[\s\S]*?```/g, (m) => (/"action"\s*:\s*"(create_event|update_event|delete_event)"/.test(m) ? '' : m));
+    // Also remove solitary JSON objects that look like actions
+    if (/"action"\s*:\s*"(create_event|update_event|delete_event)"/.test(sanitized)) {
+      sanitized = sanitized.replace(/\{[\s\S]*?\}/g, (obj) => (/"action"\s*:\s*"(create_event|update_event|delete_event)"/.test(obj) ? '' : obj));
+    }
+    sanitized = sanitized.trim();
+    res.json({ response: sanitized, actions });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
@@ -232,14 +249,24 @@ function extractActionsFromText(text: string) {
   });
   // Also naive brace match (first large JSON object)
   const braceMatch = text.match(/\{[\s\S]*\}/);
-  if (braceMatch) candidates.push(braceMatch[0]);
+  // Only add brace match if no fenced JSON detected to avoid duplication
+  if (codeFenceMatches.length === 0 && braceMatch) candidates.push(braceMatch[0]);
+  const seen = new Set<string>();
   candidates.forEach(c => {
     try {
       const parsed = JSON.parse(c);
+      const key = JSON.stringify(parsed);
+      if (seen.has(key)) return; // dedupe identical JSON
       if (parsed && (parsed.action || parsed.type)) {
         actions.push(parsed);
+        seen.add(key);
       } else if (parsed && parsed.summary && (parsed.start || parsed.end)) {
-        actions.push({ action: 'create_event', event: parsed });
+        const wrapped = { action: 'create_event', event: parsed };
+        const wKey = JSON.stringify(wrapped);
+        if (!seen.has(wKey)) {
+          actions.push(wrapped);
+          seen.add(wKey);
+        }
       }
     } catch (_) {
       /* ignore */
@@ -264,23 +291,34 @@ app.post('/api/assistant/stream', requireValidToken, async (req: Request, res: R
 
     const groundingTool = { googleSearch: {} };
     const config = { tools: [groundingTool] };
-    const prompt = `You are a calendar assistant. The user has the following events: ${JSON.stringify(events)}\n\nProvide a helpful response about their schedule. Only advise on scheduling and research applicable information. If they want to add an event, return a JSON object with keys action:"create_event" and event:{summary, description(optional), location(optional), start:{dateTime or date}, end:{dateTime or date}, attendees(optional array of emails)}. Conversation history:\n\n`;
+    const actionSchema = `Action JSON schema (return ONLY when user explicitly wants to modify calendar):\n{
+  "action": "create_event" | "update_event" | "delete_event",
+  "event?": { "summary": string, "description?": string, "location?": string, "start": {"dateTime"|"date": string}, "end": {"dateTime"|"date": string}, "attendees?": [{"email": string}] },
+  "target?": { "id?": string, "summary?": string, "start?": string },
+  "updates?": { "summary?": string, "description?": string, "location?": string, "start?": {"dateTime"|"date": string}, "end?": {"dateTime"|"date": string} }
+}\nGuidelines: Only emit JSON inside a code fence when an action is clearly requested. For moves, use update_event with updates.start/end. For deletion, use delete_event with target.`;
+    const prompt = `You are a calendar assistant. Current events: ${JSON.stringify(events)}\n\n${actionSchema}\nProvide an assistant reply. Conversation history:\n\n`;
     const result = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: prompt + JSON.stringify(context) + '\nUser query: ' + query,
       config
     });
     const fullText = result.text || '';
-    const rawChunks = fullText.match(/[^.!?\n]+[.!?\n]+|[^.!?\n]+$/g) || [fullText];
+    const actions = extractActionsFromText(fullText);
+    // Sanitize visible text (strip action JSON)
+    let sanitized = fullText.replace(/```json[\s\S]*?```/g, '')
+                            .replace(/```[\s\S]*?```/g, (m) => (/"action"\s*:\s*"(create_event|update_event|delete_event)"/.test(m) ? '' : m));
+    if (/"action"\s*:\s*"(create_event|update_event|delete_event)"/.test(sanitized)) {
+      sanitized = sanitized.replace(/\{[\s\S]*?\}/g, (obj) => (/"action"\s*:\s*"(create_event|update_event|delete_event)"/.test(obj) ? '' : obj));
+    }
+    sanitized = sanitized.trim();
+    const rawChunks = sanitized.match(/[^.!?\n]+[.!?\n]+|[^.!?\n]+$/g) || [sanitized];
     const chunks = rawChunks.map(c => (c || '').trim()).filter(Boolean);
     for (const chunk of chunks) {
-      res.write(`data: ${JSON.stringify({ delta: chunk + ' ' })}\n\n`);
+      if (chunk) res.write(`data: ${JSON.stringify({ delta: chunk + ' ' })}\n\n`);
     }
-    if (fullText) {
-      const actions = extractActionsFromText(fullText);
-      if (actions.length) {
-        res.write(`data: ${JSON.stringify({ type: 'actions', actions })}\n\n`);
-      }
+    if (actions.length) {
+      res.write(`data: ${JSON.stringify({ type: 'actions', actions })}\n\n`);
     }
     res.write('data: [DONE]\n\n');
     res.end();
