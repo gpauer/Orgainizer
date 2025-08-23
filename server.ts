@@ -431,11 +431,18 @@ app.post('/api/assistant/stream', requireValidToken, async (req: Request, res: R
     if (/"action"\s*:\s*"(create_event|update_event|delete_event)"/.test(sanitized)) {
       sanitized = sanitized.replace(/\{[\s\S]*?\}/g, (obj) => (/"action"\s*:\s*"(create_event|update_event|delete_event)"/.test(obj) ? '' : obj));
     }
-    sanitized = sanitized.trim();
-    const rawChunks = sanitized.match(/[^.!?\n]+[.!?\n]+|[^.!?\n]+$/g) || [sanitized];
-    const chunks = rawChunks.map(c => (c || '').trim()).filter(Boolean);
-    for (const chunk of chunks) {
-      if (chunk) res.write(`data: ${JSON.stringify({ delta: chunk + ' ' })}\n\n`);
+    // Normalize excessive spaces after bullet markers ("*   ")
+    sanitized = sanitized.replace(/(^|\n)([\-*+])\s{2,}/g, (_, p1, p2) => `${p1}${p2} `);
+    // Ensure bullet items start on new lines (if model inlined them): insert newline before space-asterisk-space patterns following colon
+    sanitized = sanitized.replace(/(:)\s+(\*)\s/g, (m, colon, star) => `${colon}\n${star} `);
+    sanitized = sanitized.trimEnd();
+    // Stream line-by-line preserving markdown structure
+    const lines = sanitized.split(/\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      // Preserve empty line for paragraph spacing
+      const delta = line === '' ? '\n' : line + '\n';
+      res.write(`data: ${JSON.stringify({ delta })}\n\n`);
     }
     if (actions.length) {
       res.write(`data: ${JSON.stringify({ type: 'actions', actions })}\n\n`);
