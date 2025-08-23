@@ -69,6 +69,42 @@
   font-style: italic;
 }
 
+/* TTS controls */
+.tts-controls {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.tts-btn {
+  background: #1f2730;
+  border: 1px solid #31404d;
+  color: #e2e8f0;
+  padding: 4px 8px;
+  font-size: 0.7rem;
+  border-radius: 6px;
+  cursor: pointer;
+  line-height: 1;
+  transition: background 0.15s, border-color 0.15s;
+}
+.tts-btn:hover { background:#27313b; border-color:#3b82f6; }
+.tts-btn:active { background:#31404d; }
+
+.auto-speak-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.7rem;
+  background: #1f2730;
+  color: #cbd5e1;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid #2d3640;
+}
+.auto-speak-toggle input { margin:0; }
+.auto-speak-toggle:hover { border-color:#3b82f6; }
+
 /* Markdown formatting inside messages */
 .message .inline-code { background:#1f2730; padding:2px 5px; border-radius:4px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 0.85em; }
 .message .code-block { display:block; background:#1f2730; padding:10px 12px; border-radius:8px; overflow:auto; margin:6px 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size:0.78rem; line-height:1.4; }

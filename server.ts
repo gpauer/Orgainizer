@@ -315,6 +315,147 @@ app.post('/api/assistant/stream', requireValidToken, async (req: Request, res: R
   }
 });
 
+// Gemini Text-To-Speech endpoint (single-speaker)
+// POST /api/assistant/tts { text: string; voiceName?: string }
+app.post('/api/assistant/tts', requireValidToken, async (req: Request, res: Response) => {
+  try {
+    if (!process.env.GEMINI_API_KEY) return res.status(500).json({ error: 'Gemini API key not configured' });
+    const { text, voiceName } = req.body as { text?: string; voiceName?: string };
+    if (!text || !text.trim()) return res.status(400).json({ error: 'Missing text' });
+    const voice = (voiceName || 'Kore').trim();
+    // Reuse existing ai client (already created above) instead of instantiating a new one.
+    const result: any = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-preview-tts',
+      contents: text.trim(),
+      config: {
+        responseModalities: ['AUDIO'],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName: voice }
+          }
+        }
+      }
+    });
+    const candidate = result?.candidates?.[0];
+    const part = candidate?.content?.parts?.[0];
+    const inline = part?.inlineData || part?.inline_data || {};
+    const dataB64: string | undefined = inline.data || part?.data;
+    const mime: string | undefined = inline.mimeType || inline.mime_type || part?.mimeType || part?.mime_type;
+    if (!dataB64) return res.status(500).json({ error: 'No audio data returned' });
+
+    // Gemini TTS currently returns raw 16-bit PCM (single channel, 24kHz) bytes (no WAV header) in many SDK builds.
+    // If mime indicates already wav, just passthrough; else wrap in RIFF/WAV container.
+    function pcm16ToWavBase64(pcmB64: string, sampleRate = 24000, channels = 1, bitsPerSample = 16) {
+      const pcm = Buffer.from(pcmB64, 'base64');
+      const byteRate = sampleRate * channels * bitsPerSample / 8;
+      const blockAlign = channels * bitsPerSample / 8;
+      const wavHeader = Buffer.alloc(44);
+      // ChunkID 'RIFF'
+      wavHeader.write('RIFF', 0);
+      // ChunkSize 36 + SubChunk2Size
+      wavHeader.writeUInt32LE(36 + pcm.length, 4);
+      // Format 'WAVE'
+      wavHeader.write('WAVE', 8);
+      // Subchunk1ID 'fmt '
+      wavHeader.write('fmt ', 12);
+      // Subchunk1Size (16 for PCM)
+      wavHeader.writeUInt32LE(16, 16);
+      // AudioFormat (1 = PCM)
+      wavHeader.writeUInt16LE(1, 20);
+      // NumChannels
+      wavHeader.writeUInt16LE(channels, 22);
+      // SampleRate
+      wavHeader.writeUInt32LE(sampleRate, 24);
+      // ByteRate
+      wavHeader.writeUInt32LE(byteRate, 28);
+      // BlockAlign
+      wavHeader.writeUInt16LE(blockAlign, 32);
+      // BitsPerSample
+      wavHeader.writeUInt16LE(bitsPerSample, 34);
+      // Subchunk2ID 'data'
+      wavHeader.write('data', 36);
+      // Subchunk2Size
+      wavHeader.writeUInt32LE(pcm.length, 40);
+      const wav = Buffer.concat([wavHeader, pcm]);
+      return wav.toString('base64');
+    }
+
+    let finalB64 = dataB64;
+    let finalMime = 'audio/wav';
+    if (mime && /wav/i.test(mime)) {
+      finalMime = mime;
+    } else {
+      // Assume raw PCM -> wrap
+      finalB64 = pcm16ToWavBase64(dataB64);
+      finalMime = 'audio/wav';
+    }
+    res.json({ audio: finalB64, mimeType: finalMime, originalMimeType: mime || null, voice });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Streaming TTS via Server-Sent Events: emits raw PCM16 chunks (base64) after an init message.
+// Client reconstructs & plays incrementally with WebAudio.
+app.post('/api/assistant/tts/stream', requireValidToken, async (req: Request, res: Response) => {
+  try {
+    if (!GEMINI_API_KEY) {
+      res.writeHead(500, { 'Content-Type': 'text/event-stream' });
+      res.write(`data: ${JSON.stringify({ error: 'Gemini API key not configured' })}\n\n`);
+      return res.end();
+    }
+    const { text, voiceName } = req.body as { text?: string; voiceName?: string };
+    if (!text || !text.trim()) {
+      res.writeHead(400, { 'Content-Type': 'text/event-stream' });
+      res.write(`data: ${JSON.stringify({ error: 'Missing text' })}\n\n`);
+      return res.end();
+    }
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+    const voice = (voiceName || 'Kore').trim();
+    const result: any = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-preview-tts',
+      contents: text.trim(),
+      config: {
+        responseModalities: ['AUDIO'],
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } }
+      }
+    });
+    const candidate = result?.candidates?.[0];
+    const part = candidate?.content?.parts?.[0];
+    let dataB64: string | undefined = part?.inlineData?.data || part?.inline_data?.data || part?.data;
+    if (!dataB64) {
+      res.write(`data: ${JSON.stringify({ error: 'No audio data returned' })}\n\n`);
+      res.write('data: {"done":true}\n\n');
+      return res.end();
+    }
+    let buf = Buffer.from(dataB64, 'base64');
+    // If WAV (RIFF header), strip 44-byte header to get PCM for streaming
+    if (buf.slice(0,4).toString('ascii') === 'RIFF' && buf.length > 44) {
+      buf = buf.slice(44);
+    }
+    const sampleRate = 24000; // Gemini TTS default
+    const channels = 1;
+    const bitsPerSample = 16;
+    res.write(`data: ${JSON.stringify({ init: { sampleRate, channels, bitsPerSample, voice } })}\n\n`);
+    const chunkSize = sampleRate * channels * (bitsPerSample/8) / 10; // ~100ms chunks
+    for (let offset = 0; offset < buf.length; offset += chunkSize) {
+      const chunk = buf.subarray(offset, Math.min(offset + chunkSize, buf.length));
+      res.write(`data: ${JSON.stringify({ chunk: chunk.toString('base64') })}\n\n`);
+    }
+    res.write('data: {"done":true}\n\n');
+    res.end();
+  } catch (error: any) {
+    try {
+      res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+      res.write('data: {"done":true}\n\n');
+      res.end();
+    } catch {/* ignore */}
+  }
+});
+
 const port = PORT || '3001';
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
