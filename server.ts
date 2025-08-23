@@ -6,6 +6,8 @@ import { GoogleGenAI } from "@google/genai";
 
 import { google } from 'googleapis';
 
+import { getCalendarEvents } from './api/calendar';
+
 dotenv.config();
 
 const app = express();
@@ -94,28 +96,8 @@ app.get('/api/auth/google/callback', async (req: Request, res: Response) => {
   }
 });
 
-app.get('/api/calendar/events', requireValidToken, async (req: Request, res: Response) => {
-  try {
-    const token = req.headers['token'] as string | undefined;
-    if (!token) {
-      return res.status(401).json({ error: 'Missing token header' });
-    }
-    oAuth2Client.setCredentials({ access_token: token });
 
-    const calendar = google.calendar({ version: 'v3', auth: oAuth2Client });
-    const response = await calendar.events.list({
-      calendarId: 'primary',
-      timeMin: new Date().toISOString(),
-      maxResults: 10,
-      singleEvents: true,
-      orderBy: 'startTime'
-    });
-
-    res.json(response.data.items);
-  } catch (error: any) {
-    res.status(400).json({ error: error.message });
-  }
-});
+app.get('/api/calendar/events', requireValidToken, (req, res) => getCalendarEvents(req, res, oAuth2Client));
 
 // Create a calendar event
 app.post('/api/calendar/events', requireValidToken, async (req: Request, res: Response) => {
