@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { OAuth2Client } from 'google-auth-library';
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Modality } from "@google/genai";
 
 import { google } from 'googleapis';
 
@@ -18,6 +18,7 @@ const {
   GOOGLE_CLIENT_SECRET,
   REDIRECT_URI,
   GEMINI_API_KEY,
+  GEMINI_LIVE_MODEL,
   PORT
 } = process.env as Record<string, string>;
 
@@ -27,6 +28,9 @@ if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !REDIRECT_URI) {
 if (!GEMINI_API_KEY) {
   console.warn('GEMINI_API_KEY missing. AI features will fail.');
 }
+if (!GEMINI_LIVE_MODEL) {
+  console.warn('GEMINI_LIVE_MODEL not set. Falling back to gemini-2.5-flash for live voice scaffolding.');
+}
 
 const oAuth2Client = new OAuth2Client(
   GOOGLE_CLIENT_ID,
@@ -35,6 +39,23 @@ const oAuth2Client = new OAuth2Client(
 );
 
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY});
+
+// --- Gemini Live (Voice) WebRTC session scaffolding ---
+// Google Gemini Live currently exposes a WebRTC (SDP) based negotiation endpoint.
+// This implementation is a BEST-EFFORT scaffold and may require adjustment to the
+// exact model name or URL shape as Google evolves the API. Adjust GEMINI_LIVE_MODEL
+// via env (e.g. gemini-2.5-flash) when deploying. Do NOT expose the API key to the browser.
+
+interface LiveSessionCacheEntry {
+  id: string;
+  created: number;
+  model: string;
+}
+const liveSessions = new Map<string, LiveSessionCacheEntry>();
+
+function generateId() {
+  return Math.random().toString(36).slice(2, 10);
+}
 
 // Simple in-memory token info cache
 interface CachedTokenInfo { exp: number; checkedAt: number; }
@@ -237,6 +258,29 @@ app.post('/api/assistant/query', requireValidToken, async (req: Request, res: Re
   }
 });
 
+// ---- Live Voice Session Endpoints ----
+// 1) Create a logical session (ephemeral on our server) so the client can negotiate.
+app.post('/api/assistant/voice/session', requireValidToken, async (_req: Request, res: Response) => {
+  if (!GEMINI_API_KEY) return res.status(500).json({ error: 'Gemini API key not configured' });
+  // Prefer a live audio capable model; allow override via env.
+  const model = GEMINI_LIVE_MODEL || 'gemini-live-2.5-flash-preview';
+  const id = generateId();
+  liveSessions.set(id, { id, created: Date.now(), model });
+  // Simple TTL cleanup (lazy): purge entries older than 30m
+  for (const [k, v] of liveSessions) {
+    if (Date.now() - v.created > 30 * 60 * 1000) liveSessions.delete(k);
+  }
+  res.json({
+    session: { id, model },
+    instructions: 'WebRTC offer/answer with /api/assistant/voice/offer. Audio is bidirectional. (Preview scaffold)'
+  });
+});
+
+// WebSocket bridge (client <-> server <-> Gemini Live). Client sends base64 PCM 16k chunks.
+import { WebSocketServer } from 'ws';
+interface BridgeState { sessionId: string; upstream: any; created: number; closed: boolean; }
+const bridgeStates = new Map<any, BridgeState>();
+
 // Helper to extract structured actions (simple heuristic JSON extraction)
 function extractActionsFromText(text: string) {
   // Look for JSON blocks that appear to contain an action
@@ -336,4 +380,97 @@ app.post('/api/assistant/stream', requireValidToken, async (req: Request, res: R
 const port = PORT || '3001';
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
+  // Initialize WebSocket bridge once server is up
+  const { Server } = require('http');
+  // Access underlying server not returned (since app.listen already created it)
+  // For simplicity, create a separate WSS on another port offset (port+1) to avoid refactoring.
+  const wsPort = Number(port) + 1;
+  const { WebSocketServer } = require('ws');
+  const wss = new WebSocketServer({ port: wsPort });
+  console.log(`Voice bridge WebSocket listening on ws://localhost:${wsPort}`);
+  wss.on('connection', async (ws: any, req: any) => {
+    const url = new URL(req.url, `http://localhost:${wsPort}`);
+    const sessionId = url.searchParams.get('sessionId') || '';
+    if (!liveSessions.has(sessionId)) {
+      ws.close(4001, 'Invalid session');
+      return;
+    }
+    if (!GEMINI_API_KEY) {
+      ws.close(4002, 'No API key');
+      return;
+    }
+  const model = liveSessions.get(sessionId)!.model;
+    try {
+      const responseQueue: any[] = [];
+      const upstream = await (ai as any).live.connect({
+        model,
+        config: {
+          responseModalities: [Modality.AUDIO],
+          systemInstruction: 'You are a helpful calendar voice assistant.'
+        },
+        callbacks: {
+      onmessage(msg: any) { responseQueue.push(msg); },
+          onerror(e: any) { ws.send(JSON.stringify({ type: 'error', error: e.message })); },
+          onclose(e: any) { ws.send(JSON.stringify({ type: 'close', reason: e.reason })); }
+        }
+      });
+      const state: BridgeState = { sessionId, upstream, created: Date.now(), closed: false };
+      bridgeStates.set(ws, state);
+      ws.send(JSON.stringify({ type: 'ready' }));
+      // Poll queue to forward audio data events
+      const poll = () => {
+        if (state.closed) return;
+        while (responseQueue.length) {
+          const m = responseQueue.shift();
+          try {
+            const sc = m?.serverContent;
+            let sent = false;
+            if (Array.isArray(sc?.parts)) {
+              for (const p of sc.parts) {
+                const chunk = p?.audio?.data;
+                if (chunk) {
+                  ws.send(JSON.stringify({ type: 'audio', data: chunk }));
+                  sent = true;
+                }
+              }
+              if (sc?.turnComplete) ws.send(JSON.stringify({ type: 'turnComplete' }));
+            }
+            // Fallback: if no parts found, try top-level data (avoid duplicates)
+            if (!sent && m?.data) {
+              ws.send(JSON.stringify({ type: 'audio', data: m.data }));
+            }
+          } catch (err) {
+            ws.send(JSON.stringify({ type: 'warn', warn: 'Failed to parse upstream message.' }));
+          }
+        }
+        setTimeout(poll, 60);
+      };
+      poll();
+      ws.on('message', (raw: any) => {
+        try {
+          const parsed = JSON.parse(raw.toString());
+          if (parsed.type === 'audio' && parsed.data) {
+            upstream.sendRealtimeInput({
+              audio: { data: parsed.data, mimeType: 'audio/pcm;rate=16000' }
+            });
+          } else if (parsed.type === 'text' && parsed.text) {
+            upstream.sendRealtimeInput({ text: parsed.text });
+          } else if (parsed.type === 'commit') {
+            // Future: mark end of user turn if API requires explicit delimiting.
+            if (upstream.commitTurn) {
+              try { upstream.commitTurn(); } catch {}
+            }
+          }
+        } catch { /* ignore */ }
+      });
+      ws.on('close', () => {
+        state.closed = true;
+        try { upstream.close?.(); } catch {}
+        bridgeStates.delete(ws);
+      });
+    } catch (err: any) {
+      ws.send(JSON.stringify({ type: 'error', error: err.message }));
+      ws.close();
+    }
+  });
 });

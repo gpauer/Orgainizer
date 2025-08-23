@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './components/Login';
 import Calendar from './components/Calendar';
 import ChatAssistant from './components/ChatAssistant';
+import VoiceAssistant from './components/VoiceAssistant';
 import { useToasts } from './components/Notifications';
 
 const App: React.FC = () => {
@@ -66,7 +67,10 @@ const App: React.FC = () => {
                 </header>
                 <div className="main-content">
                   <Calendar token={token!} />
-                  <ChatAssistant token={token!} />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: 1 }}>
+                    <ChatAssistant token={token!} />
+                    <VoiceAssistant token={token!} />
+                  </div>
                 </div>
               </div>
             ) : (
