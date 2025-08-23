@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import axios from 'axios';
+import api from '../api/http';
 import './ChatAssistant.css';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -32,13 +32,11 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
     setIsLoading(true);
 
     try {
-      const eventsResponse = await axios.get('http://localhost:3001/api/calendar/events', {
-        headers: { token }
-      });
+  const eventsResponse = await api.get('/calendar/events');
 
       console.log("Context sent: " + JSON.stringify(newConversation));
 
-      const aiResponse = await axios.post('http://localhost:3001/api/assistant/query', {
+  const aiResponse = await api.post('/assistant/query', {
         query,
         events: eventsResponse.data,
         context: newConversation

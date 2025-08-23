@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { OAuth2Client } from 'google-auth-library';
 import { GoogleGenAI } from "@google/genai";
@@ -36,6 +36,37 @@ const oAuth2Client = new OAuth2Client(
 
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY});
 
+// Simple in-memory token info cache
+interface CachedTokenInfo { exp: number; checkedAt: number; }
+const tokenInfoCache = new Map<string, CachedTokenInfo>();
+
+async function requireValidToken(req: Request, res: Response, next: NextFunction) {
+  try {
+    const token = req.headers['token'] as string | undefined;
+    if (!token) return res.status(401).json({ error: 'Missing token header' });
+    const cached = tokenInfoCache.get(token);
+    const now = Date.now();
+    if (cached && now < cached.exp - 30_000) { // 30s safety buffer
+      return next();
+    }
+    // Validate token with Google; get remaining lifetime
+    const info: any = await oAuth2Client.getTokenInfo(token);
+    // Attempt to compute expiration; some environments return expires_in seconds.
+    let exp = now + 5 * 60 * 1000; // default 5m if unknown
+    if (typeof info.expires_in === 'number') {
+      exp = now + info.expires_in * 1000;
+    } else if (info.exp) {
+      // exp as unix timestamp seconds
+      exp = info.exp * 1000;
+    }
+    if (exp <= now) return res.status(401).json({ error: 'Token expired' });
+    tokenInfoCache.set(token, { exp, checkedAt: now });
+    next();
+  } catch (err: any) {
+    return res.status(401).json({ error: 'Invalid or expired token', detail: err?.message });
+  }
+}
+
 app.get('/api/auth/google', (_req: Request, res: Response) => {
   try {
     const authUrl = oAuth2Client.generateAuthUrl({
@@ -63,7 +94,7 @@ app.get('/api/auth/google/callback', async (req: Request, res: Response) => {
   }
 });
 
-app.get('/api/calendar/events', async (req: Request, res: Response) => {
+app.get('/api/calendar/events', requireValidToken, async (req: Request, res: Response) => {
   try {
     const token = req.headers['token'] as string | undefined;
     if (!token) {
@@ -87,7 +118,7 @@ app.get('/api/calendar/events', async (req: Request, res: Response) => {
 });
 
 // Create a calendar event
-app.post('/api/calendar/events', async (req: Request, res: Response) => {
+app.post('/api/calendar/events', requireValidToken, async (req: Request, res: Response) => {
   try {
     const token = req.headers['token'] as string | undefined;
     if (!token) return res.status(401).json({ error: 'Missing token header' });
@@ -115,7 +146,7 @@ app.post('/api/calendar/events', async (req: Request, res: Response) => {
 });
 
 // Update (patch) a calendar event
-app.put('/api/calendar/events/:id', async (req: Request, res: Response) => {
+app.put('/api/calendar/events/:id', requireValidToken, async (req: Request, res: Response) => {
   try {
     const token = req.headers['token'] as string | undefined;
     if (!token) return res.status(401).json({ error: 'Missing token header' });
@@ -143,7 +174,7 @@ app.put('/api/calendar/events/:id', async (req: Request, res: Response) => {
 });
 
 // Delete a calendar event
-app.delete('/api/calendar/events/:id', async (req: Request, res: Response) => {
+app.delete('/api/calendar/events/:id', requireValidToken, async (req: Request, res: Response) => {
   try {
     const token = req.headers['token'] as string | undefined;
     if (!token) return res.status(401).json({ error: 'Missing token header' });
@@ -158,7 +189,7 @@ app.delete('/api/calendar/events/:id', async (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/assistant/query', async (req: Request, res: Response) => {
+app.post('/api/assistant/query', requireValidToken, async (req: Request, res: Response) => {
   try {
     const { query, events, context} = req.body as { query: string; events: any[]; context : any};
     if (!GEMINI_API_KEY) {
@@ -218,7 +249,7 @@ function extractActionsFromText(text: string) {
 }
 
 // Streaming (SSE) endpoint for assistant
-app.post('/api/assistant/stream', async (req: Request, res: Response) => {
+app.post('/api/assistant/stream', requireValidToken, async (req: Request, res: Response) => {
   try {
     const { query, events, context } = req.body as { query: string; events: any[]; context: any };
     if (!GEMINI_API_KEY) {

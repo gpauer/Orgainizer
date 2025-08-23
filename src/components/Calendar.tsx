@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import api from '../api/http';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
@@ -46,10 +46,7 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
 
   const fetchEvents = async () => {
     try {
-      const response = await axios.get<GoogleEvent[]>(
-        'http://localhost:3001/api/calendar/events',
-        { headers: { token } }
-      );
+  const response = await api.get<GoogleEvent[]>('/calendar/events');
       const formattedEvents = response.data.map(event => ({
         id: event.id,
         title: event.summary,
@@ -76,7 +73,7 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
     if (!window.confirm('Delete this event?')) return;
     try {
       const deleting = selectedEvent;
-      await axios.delete(`http://localhost:3001/api/calendar/events/${deleting.id}`, { headers: { token } });
+  await api.delete(`/calendar/events/${deleting.id}`);
       setEvents(prev => prev.filter(e => e.id !== deleting.id));
       setSelectedEvent(null);
       let undone = false;
@@ -89,14 +86,14 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
           if (undone) return;
           undone = true;
           try {
-            const response = await axios.post('http://localhost:3001/api/calendar/events', {
+            const response = await api.post('/calendar/events', {
               summary: deleting.title,
               description: deleting.description,
               location: deleting.location,
               start: deleting.allDay && deleting.start ? { date: new Date(deleting.start).toISOString().slice(0,10) } : { dateTime: new Date(deleting.start).toISOString() },
               end: deleting.allDay && deleting.end ? { date: new Date(deleting.end).toISOString().slice(0,10) } : { dateTime: new Date(deleting.end).toISOString() },
               attendees: (deleting.attendees || []).map((a: any) => ({ email: a.email }))
-            }, { headers: { token } });
+            });
             const ev = response.data;
             setEvents(prev => ([...prev, {
               id: ev.id,
@@ -208,11 +205,11 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
           if (!e.start || !e.end) return;
           setUpdatingId(e.id);
           try {
-            await axios.put(`http://localhost:3001/api/calendar/events/${e.id}` , {
+            await api.put(`/calendar/events/${e.id}` , {
               summary: e.title,
               start: e.allDay ? { date: e.start.toISOString().slice(0,10) } : { dateTime: e.start.toISOString() },
               end: e.allDay ? { date: e.end.toISOString().slice(0,10) } : { dateTime: e.end.toISOString() }
-            }, { headers: { token } });
+            });
           } catch (err) {
             console.error('Move failed', err);
             info.revert();
@@ -226,11 +223,11 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
             if (!e.start || !e.end) return;
             setUpdatingId(e.id);
             try {
-              await axios.put(`http://localhost:3001/api/calendar/events/${e.id}` , {
+              await api.put(`/calendar/events/${e.id}` , {
                 summary: e.title,
                 start: e.allDay ? { date: e.start.toISOString().slice(0,10) } : { dateTime: e.start.toISOString() },
                 end: e.allDay ? { date: e.end.toISOString().slice(0,10) } : { dateTime: e.end.toISOString() }
-              }, { headers: { token } });
+              });
             } catch (err) {
               console.error('Resize failed', err);
               info.revert();
@@ -307,14 +304,14 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
                 try {
                   const startISO = new Date(`${newEvent.date}T${newEvent.startTime}:00`).toISOString();
                   const endISO = new Date(`${newEvent.date}T${newEvent.endTime}:00`).toISOString();
-                  const response = await axios.post('http://localhost:3001/api/calendar/events', {
+                  const response = await api.post('/calendar/events', {
                     summary: newEvent.summary,
                     description: newEvent.description,
                     location: newEvent.location,
           attendees: newEvent.attendees.split(',').map(a => a.trim()).filter(Boolean).map(email => ({ email })),
                     start: { dateTime: startISO },
                     end: { dateTime: endISO }
-                  }, { headers: { token } });
+                  });
                   const ev = response.data;
                   setEvents(prev => ([...prev, {
                     id: ev.id,
@@ -394,14 +391,14 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
                 try {
                   const startISO = new Date(`${editEvent.date}T${editEvent.startTime}:00`).toISOString();
                   const endISO = new Date(`${editEvent.date}T${editEvent.endTime}:00`).toISOString();
-                  const response = await axios.put(`http://localhost:3001/api/calendar/events/${editEvent.id}`, {
+                  const response = await api.put(`/calendar/events/${editEvent.id}`, {
                     summary: editEvent.summary,
                     description: editEvent.description,
                     location: editEvent.location,
                     attendees: editEvent.attendees.split(',').map((a: string) => a.trim()).filter(Boolean).map((email: string) => ({ email })),
                     start: { dateTime: startISO },
                     end: { dateTime: endISO }
-                  }, { headers: { token } });
+                  });
                   const ev = response.data;
                   setEvents(prev => prev.map(ei => ei.id === ev.id ? {
                     id: ev.id,
