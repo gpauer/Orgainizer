@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './components/Login';
 import Calendar from './components/Calendar';
 import ChatAssistant from './components/ChatAssistant';
+import { useToasts } from './components/Notifications';
 
 const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
@@ -27,6 +28,17 @@ const App: React.FC = () => {
     setToken(null);
     setIsAuthenticated(false);
   };
+
+  const { push } = useToasts();
+
+  useEffect(() => {
+    const handler = () => {
+      push({ type: 'warn', message: 'Session expired. Please sign in again.' });
+      handleLogout();
+    };
+    window.addEventListener('app:auth-expired', handler);
+    return () => window.removeEventListener('app:auth-expired', handler);
+  }, [push]);
 
   return (
     <BrowserRouter>
