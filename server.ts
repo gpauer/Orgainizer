@@ -189,6 +189,81 @@ app.post('/api/assistant/query', async (req: Request, res: Response) => {
   }
 });
 
+// Helper to extract structured actions (simple heuristic JSON extraction)
+function extractActionsFromText(text: string) {
+  // Look for JSON blocks that appear to contain an action
+  const actions: any[] = [];
+  const codeFenceMatches = text.match(/```(?:json)?\n([\s\S]*?)```/g) || [];
+  const candidates: string[] = [];
+  codeFenceMatches.forEach(block => {
+    const inner = block.replace(/```(?:json)?\n?|```/g, '').trim();
+    candidates.push(inner);
+  });
+  // Also naive brace match (first large JSON object)
+  const braceMatch = text.match(/\{[\s\S]*\}/);
+  if (braceMatch) candidates.push(braceMatch[0]);
+  candidates.forEach(c => {
+    try {
+      const parsed = JSON.parse(c);
+      if (parsed && (parsed.action || parsed.type)) {
+        actions.push(parsed);
+      } else if (parsed && parsed.summary && (parsed.start || parsed.end)) {
+        actions.push({ action: 'create_event', event: parsed });
+      }
+    } catch (_) {
+      /* ignore */
+    }
+  });
+  return actions;
+}
+
+// Streaming (SSE) endpoint for assistant
+app.post('/api/assistant/stream', async (req: Request, res: Response) => {
+  try {
+    const { query, events, context } = req.body as { query: string; events: any[]; context: any };
+    if (!GEMINI_API_KEY) {
+      res.writeHead(500, { 'Content-Type': 'text/event-stream' });
+      res.write(`data: ${JSON.stringify({ error: 'Gemini API key not configured' })}\n\n`);
+      return res.end();
+    }
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    const groundingTool = { googleSearch: {} };
+    const config = { tools: [groundingTool] };
+    const prompt = `You are a calendar assistant. The user has the following events: ${JSON.stringify(events)}\n\nProvide a helpful response about their schedule. Only advise on scheduling and research applicable information. If they want to add an event, return a JSON object with keys action:"create_event" and event:{summary, description(optional), location(optional), start:{dateTime or date}, end:{dateTime or date}, attendees(optional array of emails)}. Conversation history:\n\n`;
+    const result = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt + JSON.stringify(context) + '\nUser query: ' + query,
+      config
+    });
+    const fullText = result.text || '';
+    const rawChunks = fullText.match(/[^.!?\n]+[.!?\n]+|[^.!?\n]+$/g) || [fullText];
+    const chunks = rawChunks.map(c => (c || '').trim()).filter(Boolean);
+    for (const chunk of chunks) {
+      res.write(`data: ${JSON.stringify({ delta: chunk + ' ' })}\n\n`);
+    }
+    if (fullText) {
+      const actions = extractActionsFromText(fullText);
+      if (actions.length) {
+        res.write(`data: ${JSON.stringify({ type: 'actions', actions })}\n\n`);
+      }
+    }
+    res.write('data: [DONE]\n\n');
+    res.end();
+  } catch (error: any) {
+    try {
+      res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } catch {
+      // ignore double end
+    }
+  }
+});
+
 const port = PORT || '3001';
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
