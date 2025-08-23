@@ -47,6 +47,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
   const audioRefs = useRef<Record<number, HTMLAudioElement | null>>({});
   const audioCtxRef = useRef<AudioContext | null>(null);
   const streamStateRef = useRef<{ playingIndex?: number; bufferQueue: Float32Array[]; source?: AudioBufferSourceNode; started?: boolean; scheduledTime?: number; } | null>(null);
+  const fetchedRangesRef = useRef<{ start: Date; end: Date }[]>([]);
 
   function ensureAudioCtx() {
     if (!audioCtxRef.current) {
@@ -286,7 +287,6 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
   // Reusable send function (used by form and auto voice)
   const sendQuery = async (text: string) => {
     if (!text || isLoading) return;
-    // optimistic user message
     const newConversation: ConversationMessage[] = [
       ...conversation,
       { role: 'user', content: text }
@@ -295,14 +295,40 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
     setIsLoading(true);
     setQuery('');
     try {
-      const eventsResponse = await api.get('/calendar/events');
-      // assistant placeholder
+      // Ask backend AI for needed date ranges
+      let rangesResp: any = null;
+      try {
+        const r = await api.post('/assistant/range', { query: text, context: newConversation });
+        rangesResp = r.data;
+      } catch (e) {
+        // ignore; fallback will be no params
+      }
+      let eventsPayload: any[] = [];
+      if (rangesResp?.union) {
+        const unionStart = new Date(rangesResp.union.start + 'T00:00:00.000Z');
+        const unionEnd = new Date(rangesResp.union.end + 'T23:59:59.999Z');
+        const covered = fetchedRangesRef.current.some(r => unionStart >= r.start && unionEnd <= r.end);
+        if (covered) {
+          // Use last known events from calendar refresh (could optionally store snapshot)
+          const eventsResponse = await api.get('/calendar/events');
+          eventsPayload = Array.isArray(eventsResponse.data) ? eventsResponse.data : (eventsResponse.data.events || eventsResponse.data);
+        } else {
+          const eventsResponse = await api.get(`/calendar/events?start=${encodeURIComponent(unionStart.toISOString())}&end=${encodeURIComponent(unionEnd.toISOString())}`);
+          eventsPayload = Array.isArray(eventsResponse.data) ? eventsResponse.data : (eventsResponse.data.events || eventsResponse.data);
+          fetchedRangesRef.current.push({ start: unionStart, end: unionEnd });
+          // Merge overlapping cached ranges
+          fetchedRangesRef.current = mergeRanges(fetchedRangesRef.current);
+        }
+      } else {
+        const eventsResponse = await api.get('/calendar/events');
+        eventsPayload = Array.isArray(eventsResponse.data) ? eventsResponse.data : (eventsResponse.data.events || eventsResponse.data);
+      }
       setConversation(prev => ([...prev, { role: 'assistant', content: '' }]));
       segmentStateRef.current = { processedChars: 0, lastEmit: Date.now() };
       const resp = await fetch('http://localhost:3001/api/assistant/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', token },
-        body: JSON.stringify({ query: text, events: eventsResponse.data, context: newConversation })
+        body: JSON.stringify({ query: text, events: eventsPayload, context: newConversation })
       });
       if (!resp.body) throw new Error('No stream body');
       const reader = resp.body.getReader();
@@ -324,7 +350,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
             } else if (action.action === 'update_event') {
               let id = action.target?.id;
               if (!id) {
-                const events = eventsResponse.data as any[];
+                const events = eventsPayload as any[];
                 const match = events.find(ev => (
                   (action.target?.summary && ev.summary === action.target.summary) &&
                   (action.target?.start ? (ev.start?.dateTime || ev.start?.date) === action.target.start : true)
@@ -340,7 +366,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
             } else if (action.action === 'delete_event') {
               let id = action.target?.id;
               if (!id) {
-                const events = eventsResponse.data as any[];
+                const events = eventsPayload as any[];
                 const match = events.find(ev => (
                   (action.target?.summary && ev.summary === action.target.summary) &&
                   (action.target?.start ? (ev.start?.dateTime || ev.start?.date) === action.target.start : true)
@@ -403,6 +429,17 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
       setIsLoading(false);
     }
   };
+
+  // Build range parameters for calendar query based on natural language
+  function buildRangeParamsFromQuery(q: string): string {
+    return '';
+  }
+
+  function inferYearForMonth(monthIdx: number, now: Date): number {
+    // If month already passed this year and user likely refers to future, shift to next year
+    if (monthIdx < now.getMonth() - 1) return now.getFullYear() + 1;
+    return now.getFullYear();
+  }
 
   // ---- Voice Recording Logic ----
   async function startRecording(kind: 'auto' | 'append') {
@@ -633,3 +670,19 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
 };
 
 export default ChatAssistant;
+
+function mergeRanges(ranges: { start: Date; end: Date }[]): { start: Date; end: Date }[] {
+  if (!ranges.length) return [];
+  const sorted = [...ranges].sort((a,b)=> a.start.getTime()-b.start.getTime());
+  const merged: { start: Date; end: Date }[] = [];
+  for (const r of sorted) {
+    const last = merged[merged.length-1];
+    if (!last) { merged.push(r); continue; }
+    if (r.start.getTime() <= last.end.getTime()+ 86400000) { // join if overlapping or adjacent (1 day buffer)
+      if (r.end > last.end) last.end = r.end;
+    } else {
+      merged.push(r);
+    }
+  }
+  return merged;
+}

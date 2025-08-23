@@ -220,6 +220,143 @@ app.post('/api/assistant/query', requireValidToken, async (req: Request, res: Re
   }
 });
 
+// AI endpoint to infer needed calendar date ranges from a user prompt BEFORE fetching events.
+// POST /api/assistant/range { query: string, today?: string, context?: any[] }
+// Returns { ranges: [{ start: string, end: string, reason: string }], union: { start: string, end: string }, tokensUsed?: any, strategy: string }
+app.post('/api/assistant/range', requireValidToken, async (req: Request, res: Response) => {
+  try {
+    if (!GEMINI_API_KEY) return res.status(500).json({ error: 'Gemini API key not configured' });
+    const { query, today, context } = req.body as { query?: string; today?: string; context?: any };
+    if (!query || !query.trim()) return res.status(400).json({ error: 'Missing query' });
+    const now = today ? new Date(today) : new Date();
+    const isoToday = now.toISOString().slice(0,10);
+    const systemInstructions = `Determine minimal calendar date ranges needed to answer a user question or perform requested calendar actions. Output strict JSON only.
+Rules:
+1. Prefer a single contiguous range when months are consecutive.
+2. If user asks for multiple disjoint future periods (e.g., "June and September"), output separate ranges.
+3. Each range: start (inclusive ISO date), end (inclusive ISO date), reason (short rationale).
+4. Never exceed 18 months total span; if request is broader, clamp & note in strategy.
+5. If question is general (e.g., "What does my schedule look like?"), pick from 1 week past today to 3 months ahead.
+6. If user references explicit dates or months, cover exactly those.
+7. For "next X months" choose today through end of Xth month ahead.
+8. Always ensure start <= end.
+Output schema:
+{"ranges":[{"start":"YYYY-MM-DD","end":"YYYY-MM-DD","reason":"..."}],"union":{"start":"YYYY-MM-DD","end":"YYYY-MM-DD"},"strategy":"brief explanation"}`;
+    const prompt = `${systemInstructions}\nToday: ${isoToday}\nUser query: ${query}\nConversation (truncated): ${JSON.stringify((context||[]).slice(-6))}`;
+    let jsonText = '';
+    try {
+      const result: any = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt });
+      jsonText = (result?.text || '').trim();
+    } catch (err: any) {
+      // Fallback to heuristic if AI fails
+      return res.json(buildHeuristicRanges(query, now));
+    }
+    // Extract first JSON object
+    const match = jsonText.match(/\{[\s\S]*\}/);
+    if (!match) return res.json(buildHeuristicRanges(query, now));
+    let parsed: any;
+    try { parsed = JSON.parse(match[0]); } catch { return res.json(buildHeuristicRanges(query, now)); }
+    if (!Array.isArray(parsed.ranges)) return res.json(buildHeuristicRanges(query, now));
+    // Normalize & clamp
+    const ranges = parsed.ranges.slice(0, 10).map((r: any) => normalizeRange(r, now));
+    // Remove invalid
+  const valid = ranges.filter((r: any) => r);
+    if (!valid.length) return res.json(buildHeuristicRanges(query, now));
+    // Merge overlapping & compute union
+    const sorted = [...valid].sort((a,b)=> a.start.localeCompare(b.start));
+    // Hard clamp window span
+    const first = sorted[0];
+    const last = sorted[sorted.length-1];
+    const spanMonths = (new Date(last.end).getFullYear()-new Date(first.start).getFullYear())*12 + (new Date(last.end).getMonth()-new Date(first.start).getMonth());
+    if (spanMonths > 18) {
+      // shrink last.end
+      const clampEnd = new Date(first.start);
+      clampEnd.setMonth(clampEnd.getMonth()+18);
+      clampEnd.setDate(clampEnd.getDate()-1);
+      parsed.strategy = (parsed.strategy || '') + ' | Clamped to 18 months';
+      sorted[sorted.length-1].end = clampEnd.toISOString().slice(0,10);
+    }
+    const union = { start: sorted[0].start, end: sorted[sorted.length-1].end };
+    res.json({ ranges: sorted, union, strategy: parsed.strategy || 'ai', source: 'ai' });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+interface NormalizedRange { start: string; end: string; reason: string; }
+function normalizeRange(r: any, now: Date): NormalizedRange | null {
+  if (!r) return null;
+  const start = parseDateISO(r.start, now);
+  const end = parseDateISO(r.end, now);
+  if (!start || !end) return null;
+  if (end < start) return null;
+  return { start: start.toISOString().slice(0,10), end: end.toISOString().slice(0,10), reason: (r.reason||'').toString().slice(0,160) };
+}
+function parseDateISO(v: any, now: Date): Date | null {
+  if (!v || typeof v !== 'string') return null;
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return null;
+  // Reject absurd > 3y away
+  if (Math.abs(d.getTime()-now.getTime()) > 1000*60*60*24*366*3) return null;
+  return d;
+}
+function buildHeuristicRanges(query: string, now: Date) {
+  const lower = query.toLowerCase();
+  const addDays = (date: Date, days: number) => new Date(date.getTime()+days*86400000);
+  const monthNames = ['january','february','march','april','may','june','july','august','september','october','november','december'];
+  const found: { m: number; y: number }[] = [];
+  monthNames.forEach((m,i)=>{
+    const regex = new RegExp(`\\b${m}(?:\\s+(\\d{4}))?`,'g');
+    let match; while ((match = regex.exec(lower))) { const y = match[1]? parseInt(match[1],10): inferYear(i, now); found.push({ m:i, y }); }
+  });
+  let ranges: NormalizedRange[] = [];
+  if (found.length) {
+    const min = found.reduce((a,c)=> !a || c.y<a.y || (c.y===a.y && c.m<a.m)?c:a, null as any);
+    const max = found.reduce((a,c)=> !a || c.y>a.y || (c.y===a.y && c.m>a.m)?c:a, null as any);
+    const start = new Date(min.y, min.m,1);
+    const end = new Date(max.y, max.m+1,0,23,59,59,999);
+    ranges = [{ start: start.toISOString().slice(0,10), end: end.toISOString().slice(0,10), reason:'Referenced months' }];
+  } else if (/next\s+(\d+)\s+month/.test(lower)) {
+    const m = Math.min(parseInt(/next\s+(\d+)\s+month/.exec(lower)![1],10),12);
+    const start = now;
+    const end = new Date(now.getFullYear(), now.getMonth()+m+1,0,23,59,59,999);
+    ranges = [{ start: start.toISOString().slice(0,10), end: end.toISOString().slice(0,10), reason:`Next ${m} months` }];
+  } else if (/next\s+year/.test(lower)) {
+    const start = now;
+    const end = new Date(now.getFullYear()+1, now.getMonth()+1,0,23,59,59,999);
+    ranges = [{ start: start.toISOString().slice(0,10), end: end.toISOString().slice(0,10), reason:'Next year' }];
+  } else if (/this\s+week/.test(lower)) {
+    const day = now.getDay();
+    const weekStart = addDays(now, -day);
+    const weekEnd = addDays(weekStart,6);
+    ranges = [{ start: weekStart.toISOString().slice(0,10), end: weekEnd.toISOString().slice(0,10), reason:'This week' }];
+  } else if (/today|now/.test(lower)) {
+    ranges = [{ start: now.toISOString().slice(0,10), end: now.toISOString().slice(0,10), reason:'Today only' }];
+  } else if (/tomorrow/.test(lower)) {
+    const t = addDays(now,1);
+    ranges = [{ start: t.toISOString().slice(0,10), end: t.toISOString().slice(0,10), reason:'Tomorrow' }];
+  } else if (/next\s+week/.test(lower)) {
+    const day = now.getDay();
+    const nextWeekStart = addDays(now, 7 - day);
+    const nextWeekEnd = addDays(nextWeekStart,6);
+    ranges = [{ start: nextWeekStart.toISOString().slice(0,10), end: nextWeekEnd.toISOString().slice(0,10), reason:'Next week' }];
+  } else if (/upcoming|plan|schedule|what.*coming/.test(lower)) {
+    const start = addDays(now,-7);
+    const end = new Date(now.getFullYear(), now.getMonth()+3, now.getDate());
+    ranges = [{ start: start.toISOString().slice(0,10), end: end.toISOString().slice(0,10), reason:'Recent past + 3 months ahead' }];
+  } else {
+    const start = addDays(now,-3);
+    const end = new Date(now.getFullYear(), now.getMonth()+1, now.getDate());
+    ranges = [{ start: start.toISOString().slice(0,10), end: end.toISOString().slice(0,10), reason:'Default small window' }];
+  }
+  return { ranges, union: { start: ranges[0].start, end: ranges[ranges.length-1].end }, strategy: 'heuristic', source: 'heuristic' };
+}
+function inferYear(monthIdx: number, now: Date) {
+  // If month already passed more than 1 month ago, assume next year
+  if (monthIdx < now.getMonth()-1) return now.getFullYear()+1;
+  return now.getFullYear();
+}
+
 // Helper to extract structured actions (simple heuristic JSON extraction)
 function extractActionsFromText(text: string) {
   // Look for JSON blocks that appear to contain an action
