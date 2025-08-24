@@ -43,7 +43,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
   return (
     <div className="login-container">
-      <h1>AI Calendar Assistant</h1>
+      <h1>Orgainizer</h1>
       <button onClick={handleGoogleLogin}>Sign in with Google</button>
     </div>
   );

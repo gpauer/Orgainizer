@@ -61,7 +61,7 @@ const App: React.FC = () => {
             isAuthenticated ? (
               <div className="app-container">
                 <header>
-                  <h1>AI Calendar Assistant</h1>
+                  <h1>Orgainizer</h1>
                   <button onClick={handleLogout}>Logout</button>
                 </header>
                 <div className="main-content">

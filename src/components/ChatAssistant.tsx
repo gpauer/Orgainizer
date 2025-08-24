@@ -643,17 +643,17 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
           title={recordingAuto ? 'Stop & transcribe (auto send)' : 'Hold a voice note (auto send after silence)'}
           onClick={() => recordingAuto ? stopRecording() : startRecording('auto')}
           style={{ marginLeft: '0.5rem' }}
-        >{recordingAuto ? '⏺️ Stop' : '🎙️ Send'}</button>
+        >{recordingAuto ? '⏺️' : '🎙️'}</button>
         {/* Append-only dictation mic */}
-        <button
+        {/* <button
           type="button"
           className="tts-btn"
           disabled={isLoading || transcribing || recordingAuto}
           title={recordingAppend ? 'Stop & transcribe (append to input)' : 'Dictate and append to text box'}
           onClick={() => recordingAppend ? stopRecording() : startRecording('append')}
           style={{ marginLeft: '0.25rem' }}
-        >{recordingAppend ? '⏺️ Add' : '🗣️ Dictate'}</button>
-        {transcribing && <span style={{ fontSize: '0.7rem', marginLeft: '0.3rem' }}>Transcribing...</span>}
+        >{recordingAppend ? '⏺️ Add' : '🗣️ Dictate'}</button> */}
+        {/* {transcribing && <span style={{ fontSize: '0.7rem', marginLeft: '0.3rem' }}>Transcribing...</span>} */}
   {/* Auto browser speech toggle removed */}
         <button
           type="button"
@@ -662,9 +662,9 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
           style={{ marginLeft: '0.5rem' }}
           title={muted ? 'Unmute voice playback' : 'Mute voice playback'}
         >{muted ? '🔇' : '🔊'}</button>
-        <select value={selectedVoice} onChange={e => setSelectedVoice(e.target.value)} disabled={isLoading} style={{ marginLeft: '0.5rem' }} title="Gemini TTS voice">
+        {/* <select value={selectedVoice} onChange={e => setSelectedVoice(e.target.value)} disabled={isLoading} style={{ marginLeft: '0.5rem' }} title="Gemini TTS voice">
           {GEMINI_VOICES.map(v => <option key={v} value={v}>{v}</option>)}
-        </select>
+        </select> */}
         <button type="submit" disabled={isLoading || !query.trim()}>
           Send
         </button>
