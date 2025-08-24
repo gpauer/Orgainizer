@@ -1,6 +1,6 @@
 # Orgainizer
 
-AI-powered personal calendar assistant ("CalendAI") that connects to your Google Calendar, answers natural language questions, summarizes schedules, and performs event actions (create / update / delete) with AI assistance.
+AI-powered personal calendar assistant ("Orgainizer") that connects to your Google Calendar, answers natural language questions, summarizes schedules, and performs event actions (create / update / delete) with AI assistance.
 
 ## Features
 * Google OAuth sign-in (token passed via custom `token` header)
@@ -127,3 +127,7 @@ Headers:
 
 ---
 Happy scheduling!
+
+## Authors
+George Pauer (<georgep@bbd.co.za>)  
+Bradleigh Marks (<bradm@bbd.co.za>)
