@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
 import { OAuth2Client } from 'google-auth-library';
+import axios from 'axios';
 import { GoogleGenAI } from '@google/genai';
 
 import { createCalendarEvents, deleteCalendarEvent, getCalendarEvents, updateCalendarEvent } from './api/calendar';
@@ -26,6 +27,26 @@ const requireValidToken = requireValidTokenFactory(oAuth2Client);
 // Auth
 app.get('/api/auth/google', googleAuthUrlHandler(oAuth2Client));
 app.get('/api/auth/google/callback', googleAuthCallbackHandler(oAuth2Client));
+app.get('/api/auth/me', requireValidToken, async (req, res) => {
+	try {
+		const token = req.headers['token'] as string;
+		if (!token) return res.status(401).json({ error: 'Missing token' });
+		const { data } = await axios.get('https://www.googleapis.com/oauth2/v3/userinfo', {
+			headers: { Authorization: `Bearer ${token}` }, timeout: 5000
+		});
+		res.json({
+			email: data.email,
+			displayName: data.name,
+			profilePicture: data.picture,
+			givenName: data.given_name,
+			familyName: data.family_name,
+			locale: data.locale
+		});
+	} catch (e: any) {
+		const status = e.response?.status || 500;
+		res.status(status).json({ error: 'Failed to retrieve user info' });
+	}
+});
 
 // Calendar
 app.get('/api/calendar/events', requireValidToken, (req, res) => getCalendarEvents(req, res, oAuth2Client));

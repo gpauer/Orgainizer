@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { OAuth2Client } from 'google-auth-library';
 import { GoogleGenAI } from '@google/genai';
+import axios from 'axios';
 import { createCalendarEvents, deleteCalendarEvent, getCalendarEvents, updateCalendarEvent } from './calendar';
 import { assistantQueryHandler, assistantRangeHandler, assistantStreamHandler, assistantTTSHandler, assistantTranscribeHandler, assistantTTSStreamHandler } from './assistantHandlers';
 import { googleAuthUrlHandler, googleAuthCallbackHandler } from './authHandlers';
@@ -24,6 +25,28 @@ export function createApp() {
   // Auth
   app.get('/api/auth/google', googleAuthUrlHandler(oAuth2Client));
   app.get('/api/auth/google/callback', googleAuthCallbackHandler(oAuth2Client));
+  // Current user info (Google profile) - requires valid access token
+  app.get('/api/auth/me', requireValidToken, async (req, res) => {
+    try {
+      const token = req.headers['token'] as string;
+      if (!token) return res.status(401).json({ error: 'Missing token' });
+      const { data } = await axios.get('https://www.googleapis.com/oauth2/v3/userinfo', {
+        headers: { Authorization: `Bearer ${token}` }, timeout: 5000
+      });
+      const user = {
+        email: data.email,
+        displayName: data.name,
+        profilePicture: data.picture,
+        givenName: data.given_name,
+        familyName: data.family_name,
+        locale: data.locale
+      };
+      res.json(user);
+    } catch (e: any) {
+      const status = e.response?.status || 500;
+      res.status(status).json({ error: 'Failed to retrieve user info' });
+    }
+  });
   
   // Calendar
   app.get('/api/calendar/events', requireValidToken, (req, res) => getCalendarEvents(req, res, oAuth2Client));

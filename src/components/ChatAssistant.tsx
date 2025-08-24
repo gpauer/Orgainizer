@@ -46,12 +46,18 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
   // Keep refs of audio tags to invoke .play() programmatically (bypasses some autoplay quirks after user gesture)
   const audioRefs = useRef<Record<number, HTMLAudioElement | null>>({});
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
   const streamStateRef = useRef<{ playingIndex?: number; bufferQueue: Float32Array[]; source?: AudioBufferSourceNode; started?: boolean; scheduledTime?: number; } | null>(null);
   const fetchedRangesRef = useRef<{ start: Date; end: Date }[]>([]);
 
   function ensureAudioCtx() {
     if (!audioCtxRef.current) {
       audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    if (!gainNodeRef.current && audioCtxRef.current) {
+      gainNodeRef.current = audioCtxRef.current.createGain();
+      gainNodeRef.current.gain.value = muted ? 0 : 1;
+      gainNodeRef.current.connect(audioCtxRef.current.destination);
     }
     return audioCtxRef.current;
   }
@@ -76,6 +82,12 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
     const src = ctx.createBufferSource();
     src.buffer = audioBuffer;
     src.connect(ctx.destination);
+    try {
+      if (gainNodeRef.current) {
+        src.disconnect();
+        src.connect(gainNodeRef.current);
+      }
+    } catch { /* ignore */ }
     const startAt = Math.max(st.scheduledTime || ctx.currentTime, ctx.currentTime + 0.01);
     src.start(startAt);
     st.scheduledTime = startAt + audioBuffer.duration;
@@ -235,6 +247,21 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
     });
   }, [geminiAudio, muted]);
 
+  // Apply mute/unmute to GainNode + existing <audio> elements
+  useEffect(() => {
+    if (gainNodeRef.current) {
+      try { gainNodeRef.current.gain.setValueAtTime(muted ? 0 : 1, (audioCtxRef.current || ensureAudioCtx()).currentTime); } catch {/* ignore */}
+    }
+    Object.values(audioRefs.current).forEach(el => {
+      if (el) {
+        el.muted = muted;
+        if (!muted && el.autoplay && el.paused) {
+          el.play().catch(()=>{});
+        }
+      }
+    });
+  }, [muted]);
+
   // Cleanup any active speech on unmount
   useEffect(() => { /* no-op cleanup retained for future */ }, []);
 
@@ -378,8 +405,22 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
                 if (match) id = match.id;
               }
               if (id) {
-                await api.delete(`/calendar/events/${id}`);
+                // Capture event details for undo before deletion
+                let deletedEvent: any = (eventsPayload as any[]).find(ev => ev.id === id);
+                try {
+                  await api.delete(`/calendar/events/${id}`);
+                } catch (delErr: any) {
+                  assistantText += `\n\n❌ Failed to delete event ${id}: ${delErr.message}`;
+                  applyAssistantText();
+                  return;
+                }
                 assistantText += `\n\n🗑 Deleted event ${id}`;
+                // Notify calendar to remove immediately & show undo
+                if (deletedEvent) {
+                  window.dispatchEvent(new CustomEvent('calendar:eventDeleted', { detail: { event: deletedEvent } }));
+                } else {
+                  window.dispatchEvent(new Event('calendar:refresh'));
+                }
               } else {
                 assistantText += `\n\n⚠ Could not resolve event to delete.`;
               }
@@ -594,7 +635,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
                         src={geminiAudio[index].src}
                         style={{ maxWidth: '220px' }}
                         playsInline
-                        muted={false}
+                        muted={muted}
                         autoPlay={false}
                         onCanPlay={() => {
                           const meta = geminiAudio[index];
@@ -643,17 +684,17 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
           title={recordingAuto ? 'Stop & transcribe (auto send)' : 'Hold a voice note (auto send after silence)'}
           onClick={() => recordingAuto ? stopRecording() : startRecording('auto')}
           style={{ marginLeft: '0.5rem' }}
-        >{recordingAuto ? '⏺️ Stop' : '🎙️ Send'}</button>
+        >{recordingAuto ? '⏺️' : '🎙️'}</button>
         {/* Append-only dictation mic */}
-        <button
+        {/* <button
           type="button"
           className="tts-btn"
           disabled={isLoading || transcribing || recordingAuto}
           title={recordingAppend ? 'Stop & transcribe (append to input)' : 'Dictate and append to text box'}
           onClick={() => recordingAppend ? stopRecording() : startRecording('append')}
           style={{ marginLeft: '0.25rem' }}
-        >{recordingAppend ? '⏺️ Add' : '🗣️ Dictate'}</button>
-        {transcribing && <span style={{ fontSize: '0.7rem', marginLeft: '0.3rem' }}>Transcribing...</span>}
+        >{recordingAppend ? '⏺️ Add' : '🗣️ Dictate'}</button> */}
+        {/* {transcribing && <span style={{ fontSize: '0.7rem', marginLeft: '0.3rem' }}>Transcribing...</span>} */}
   {/* Auto browser speech toggle removed */}
         <button
           type="button"
@@ -662,9 +703,9 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
           style={{ marginLeft: '0.5rem' }}
           title={muted ? 'Unmute voice playback' : 'Mute voice playback'}
         >{muted ? '🔇' : '🔊'}</button>
-        <select value={selectedVoice} onChange={e => setSelectedVoice(e.target.value)} disabled={isLoading} style={{ marginLeft: '0.5rem' }} title="Gemini TTS voice">
+        {/* <select value={selectedVoice} onChange={e => setSelectedVoice(e.target.value)} disabled={isLoading} style={{ marginLeft: '0.5rem' }} title="Gemini TTS voice">
           {GEMINI_VOICES.map(v => <option key={v} value={v}>{v}</option>)}
-        </select>
+        </select> */}
         <button type="submit" disabled={isLoading || !query.trim()}>
           Send
         </button>

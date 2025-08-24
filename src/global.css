@@ -76,6 +76,9 @@ header button:active { transform: translateY(1px); }
 .fc-event { background: linear-gradient(135deg, var(--accent), var(--accent-hover)); border:none; padding:2px 4px; font-size:.6rem; }
 .fc-event.updating { position:relative; opacity:.55; }
 .fc-event.updating::after { content:""; position:absolute; top:2px; right:2px; width:8px; height:8px; border:2px solid #fff; border-top-color:transparent; border-radius:50%; animation: spin .6s linear infinite; }
+/* Current time line */
+.fc-timegrid-now-indicator-line { border-top: 2px solid #ef4444; }
+.fc-timegrid-now-indicator-arrow { border-color: #ef4444; }
 
 /* Chat already has its own stylesheet; align container spacing when beside calendar */
 .chat-container { margin-top:4px; }

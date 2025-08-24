@@ -91,15 +91,16 @@ export const createCalendarEvents = async (req: Request, res: Response, oAuth2Cl
       return res.status(400).json({ error: 'summary, start, and end are required' });
     }
 
+
     const calendar = google.calendar({ version: 'v3', auth: oAuth2Client });
-    const created = await calendar.events.insert({
+  const created = await calendar.events.insert({
       calendarId: 'primary',
       requestBody: {
         summary,
         description,
         location,
-        start,
-        end,
+    start: {dateTime: start.dateTime, date: start.date, timeZone: start.timeZone ?? 'Africa/Johannesburg'},
+    end: {dateTime: end.dateTime, date: end.date, timeZone: end.timeZone ?? 'Africa/Johannesburg'},
         attendees
       }
     });
@@ -138,7 +139,14 @@ export const updateCalendarEvent = async (req: Request, res: Response, oAuth2Cli
     const updated = await calendar.events.patch({
       calendarId: 'primary',
       eventId: id,
-      requestBody: { summary, description, location, start, end, attendees }
+      requestBody: { 
+        summary, 
+        description, 
+        location, 
+        start: {dateTime: start.dateTime, date: start.date, timeZone: start.timeZone ?? 'Africa/Johannesburg'},
+        end: {dateTime: end.dateTime, date: end.date, timeZone: end.timeZone ?? 'Africa/Johannesburg'},
+        attendees 
+      }
     });
     res.json(updated.data);
   } catch (error: any) {
