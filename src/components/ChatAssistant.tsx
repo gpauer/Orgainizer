@@ -373,7 +373,46 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
         });
       };
       async function executeActions(actions: any[]) {
+        // Try to batch create events if multiple create_event actions present
+        const createPayload = actions.filter(a => a.action === 'create_event' && a.event).map(a => a.event);
+        if (createPayload.length > 1) {
+          try {
+            await api.post('/calendar/events', createPayload);
+            assistantText += `\n\n✅ Created ${createPayload.length} events.`;
+            window.dispatchEvent(new Event('calendar:refresh'));
+          } catch (err: any) {
+            assistantText += `\n\n❌ Failed batch create: ${err.message}`;
+          }
+        }
+        // Pre-resolve target ids for delete batch
+        const deleteTargets: string[] = [];
         for (const action of actions) {
+          if (action.action === 'delete_event') {
+            let id = action.target?.id;
+            if (!id) {
+              const events = eventsPayload as any[];
+              const match = events.find(ev => (
+                (action.target?.summary && ev.summary === action.target.summary) &&
+                (action.target?.start ? (ev.start?.dateTime || ev.start?.date) === action.target.start : true)
+              ));
+              if (match) id = match.id;
+            }
+            if (id) deleteTargets.push(id);
+          }
+        }
+        if (deleteTargets.length > 1) {
+          try {
+            await api.post('/calendar/events/batch-delete', { ids: deleteTargets });
+            assistantText += `\n\n🗑 Deleted ${deleteTargets.length} events.`;
+            window.dispatchEvent(new Event('calendar:refresh'));
+          } catch (err: any) {
+            assistantText += `\n\n❌ Failed batch delete: ${err.message}`;
+          }
+        }
+        for (const action of actions) {
+          if (action.action === 'delete_event' && deleteTargets.length > 1) continue; // already handled
+          // Skip individual create if already covered by batch
+          if (action.action === 'create_event' && createPayload.length > 1) continue;
           try {
             if (action.action === 'create_event' && action.event) {
               await api.post('/calendar/events', action.event);

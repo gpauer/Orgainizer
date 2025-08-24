@@ -5,7 +5,7 @@ import { OAuth2Client } from 'google-auth-library';
 import axios from 'axios';
 import { GoogleGenAI } from '@google/genai';
 
-import { createCalendarEvents, deleteCalendarEvent, getCalendarEvents, updateCalendarEvent } from './api/calendar';
+import { createCalendarEvents, deleteCalendarEvent, deleteCalendarEventsBatch, getCalendarEvents, updateCalendarEvent } from './api/calendar';
 import { requireValidTokenFactory } from './api/middleware';
 import { assistantQueryHandler, assistantRangeHandler, assistantStreamHandler, assistantTTSHandler, assistantTranscribeHandler, assistantTTSStreamHandler } from './api/assistantHandlers';
 import { googleAuthUrlHandler, googleAuthCallbackHandler } from './api/authHandlers';
@@ -53,6 +53,7 @@ app.get('/api/calendar/events', requireValidToken, (req, res) => getCalendarEven
 app.post('/api/calendar/events', requireValidToken, (req, res) => createCalendarEvents(req, res, oAuth2Client));
 app.put('/api/calendar/events/:id', requireValidToken, (req, res) => updateCalendarEvent(req, res, oAuth2Client));
 app.delete('/api/calendar/events/:id', requireValidToken, (req, res) => deleteCalendarEvent(req, res, oAuth2Client));
+app.post('/api/calendar/events/batch-delete', requireValidToken, (req, res) => deleteCalendarEventsBatch(req, res, oAuth2Client));
 
 // Assistant
 app.post('/api/assistant/query', requireValidToken, assistantQueryHandler(ai));
