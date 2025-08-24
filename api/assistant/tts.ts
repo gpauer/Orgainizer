@@ -31,7 +31,7 @@ export function assistantTTSHandler(ai: GoogleGenAI) {
       if (!text || !text.trim()) return res.status(400).json({ error: 'Missing text' });
       const voice = (voiceName || 'Kore').trim();
       const result: any = await ai.models.generateContent({
-        model: process.env.GEMENI_TTS_MODEL ?? '',
+        model: process.env.GEMINI_TTS_MODEL ?? '',
         contents: text.trim(),
         config: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } }
       });
@@ -75,7 +75,7 @@ export function assistantTTSStreamHandler(ai: GoogleGenAI) {
       (res as any).flushHeaders?.();
       const voice = (voiceName || 'Kore').trim();
       const result: any = await ai.models.generateContent({
-        model: process.env.GEMENI_TTS_MODEL ?? '',
+        model: process.env.GEMINI_TTS_MODEL ?? '',
         contents: text.trim(),
         config: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } }
       });
