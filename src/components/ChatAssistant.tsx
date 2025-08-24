@@ -1,27 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import api from '../api/http';
 import './ChatAssistant.css';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { Components } from 'react-markdown';
+import { MessageList } from './chat/MessageList';
+import { ChatInput } from './chat/ChatInput';
+import { ConversationMessage, GeminiAudioState } from './chat/types';
 
-interface ChatAssistantProps {
-  token: string;
-}
-
-interface ConversationMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-interface GeminiAudioState {
-  src?: string;
-  loading: boolean;
-  error?: string;
-  voice?: string;
-  autoplay?: boolean;
-  playError?: string; // if browser blocked autoplay
-}
+interface ChatAssistantProps { token: string; }
 
 const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
   const [query, setQuery] = useState('');
@@ -40,9 +24,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
   const silenceTimerRef = useRef<any>(null);
   const hadSoundRef = useRef(false);
   const audioStreamRef = useRef<MediaStream | null>(null);
-  const GEMINI_VOICES = [
-    'Kore','Puck','Zephyr','Charon','Fenrir','Leda','Orus','Aoede','Callirrhoe','Autonoe','Enceladus','Iapetus','Umbriel','Algieba','Despina','Erinome','Algenib','Rasalgethi','Laomedeia','Achernar','Alnilam','Schedar','Gacrux','Pulcherrima','Achird','Zubenelgenubi','Vindemiatrix','Sadachbia','Sadaltager','Sulafat'
-  ];
+  const GEMINI_VOICES = ['Kore']; // trimmed list; UI currently hides voice selector
 
   // Keep refs of audio tags to invoke .play() programmatically (bypasses some autoplay quirks after user gesture)
   const audioRefs = useRef<Record<number, HTMLAudioElement | null>>({});
@@ -239,15 +221,13 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
   // Attempt programmatic playback whenever new autoplay audio arrives and not muted
   useEffect(() => {
     if (muted) return;
-    Object.entries(geminiAudio).forEach(([k, v]) => {
+    for (const [k,v] of Object.entries(geminiAudio)) {
       const idx = Number(k);
       if (v?.src && v.autoplay) {
         const el = audioRefs.current[idx];
-        if (el && el.paused) {
-          el.play().catch(() => { /* ignore (likely policy) */ });
-        }
+        if (el && el.paused) { el.play().catch(()=>{}); }
       }
-    });
+    }
   }, [geminiAudio, muted]);
 
   // Apply mute/unmute to ALL media elements in the tab + WebAudio
@@ -556,16 +536,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
     }
   };
 
-  // Build range parameters for calendar query based on natural language
-  function buildRangeParamsFromQuery(q: string): string {
-    return '';
-  }
-
-  function inferYearForMonth(monthIdx: number, now: Date): number {
-    // If month already passed this year and user likely refers to future, shift to next year
-    if (monthIdx < now.getMonth() - 1) return now.getFullYear() + 1;
-    return now.getFullYear();
-  }
+  // (Removed unused helper functions buildRangeParamsFromQuery / inferYearForMonth)
 
   // ---- Voice Recording Logic ----
   async function startRecording(kind: 'auto' | 'append') {
@@ -680,118 +651,29 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
   return (
     <div className="chat-container">
       <div className="chat-messages">
-        {conversation.length === 0 ? (
-          <div className="welcome-message">
-            <h3>Hello! I'm your calendar assistant.</h3>
-            <p>
-              Ask me about your schedule, to summarize your upcoming events, or
-              for help planning your time.
-            </p>
-          </div>
-        ) : (
-          conversation.map((msg, index) => {
-            const mdComponents: Components = {
-              a: ({node, ...props}) => <a {...props} target="_blank" rel="noopener noreferrer" />,
-              code: ({className, children, ...props}: any) => {
-                const inline = (props as any).inline;
-                return (
-                  <code className={inline ? 'inline-code' : `code-block ${className || ''}`.trim()} {...props}>{children}</code>
-                );
-              },
-              ul: ({node, ...props}) => <ul className="msg-list" {...props} />,
-              ol: ({node, ...props}) => <ol className="msg-list" {...props} />,
-              blockquote: ({node, ...props}) => <blockquote className="msg-quote" {...props} />
-            };
-            return (
-              <div key={index} className={`message ${msg.role}`}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-                  {msg.content}
-                </ReactMarkdown>
-                {msg.role === 'assistant' && !!msg.content && (
-                  <div className="tts-controls">
-                    {geminiAudio[index]?.src ? (
-                      <audio
-                        ref={el => { audioRefs.current[index] = el; }}
-                        controls
-                        src={geminiAudio[index].src}
-                        style={{ maxWidth: '220px' }}
-                        playsInline
-                        muted={muted}
-                        autoPlay={false}
-                        onCanPlay={() => {
-                          const meta = geminiAudio[index];
-                          if (meta?.autoplay && !muted) {
-                            const el = audioRefs.current[index];
-                            el?.play().catch(err => {
-                              setGeminiAudio(prev => ({ ...prev, [index]: { ...prev[index], playError: err?.name || 'play_failed' } }));
-                            });
-                          }
-                        }}
-                      />
-                    ) : (
-                      <button
-                        type="button"
-                        disabled={geminiAudio[index]?.loading}
-                        onClick={() => requestGeminiTTS(index)}
-                        className="tts-btn"
-                        title={`Generate voice (${selectedVoice})`}
-                      >{geminiAudio[index]?.loading ? '⏳' : '🎤 Voice'}</button>
-                    )}
-                    {(geminiAudio[index]?.error || geminiAudio[index]?.playError) && (
-                      <span style={{ color: '#c00', fontSize: '0.7rem', marginLeft: '0.4rem' }} title={geminiAudio[index]?.error || geminiAudio[index]?.playError}>⚠</span>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })
-        )}
+        <MessageList
+          conversation={conversation}
+          geminiAudio={geminiAudio}
+          requestGeminiTTS={requestGeminiTTS}
+            audioRefs={audioRefs}
+          muted={muted}
+          selectedVoice={selectedVoice}
+        />
         {isLoading && <div className="message assistant loading">Thinking...</div>}
       </div>
-
-      <form onSubmit={handleSubmit} className="chat-input">
-        <input
-          type="text"
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          placeholder="Ask about your schedule..."
-          disabled={isLoading}
-        />
-        {/* Auto-send microphone */}
-        <button
-          type="button"
-          className="tts-btn"
-          disabled={isLoading || transcribing || recordingAppend}
-          title={recordingAuto ? 'Stop & transcribe (auto send)' : 'Hold a voice note (auto send after silence)'}
-          onClick={() => recordingAuto ? stopRecording() : startRecording('auto')}
-          style={{ marginLeft: '0.5rem' }}
-        >{recordingAuto ? '⏺️' : '🎙️'}</button>
-        {/* Append-only dictation mic */}
-        {/* <button
-          type="button"
-          className="tts-btn"
-          disabled={isLoading || transcribing || recordingAuto}
-          title={recordingAppend ? 'Stop & transcribe (append to input)' : 'Dictate and append to text box'}
-          onClick={() => recordingAppend ? stopRecording() : startRecording('append')}
-          style={{ marginLeft: '0.25rem' }}
-        >{recordingAppend ? '⏺️ Add' : '🗣️ Dictate'}</button> */}
-        {/* {transcribing && <span style={{ fontSize: '0.7rem', marginLeft: '0.3rem' }}>Transcribing...</span>} */}
-  {/* Auto browser speech toggle removed */}
-        <button
-          type="button"
-          onClick={() => setMuted(m => !m)}
-          className="tts-btn"
-          style={{ marginLeft: '0.5rem' }}
-          title={muted ? 'Unmute all tab audio' : 'Mute all tab audio'}
-          aria-pressed={muted}
-        >{muted ? '🔇' : '🔊'}</button>
-        {/* <select value={selectedVoice} onChange={e => setSelectedVoice(e.target.value)} disabled={isLoading} style={{ marginLeft: '0.5rem' }} title="Gemini TTS voice">
-          {GEMINI_VOICES.map(v => <option key={v} value={v}>{v}</option>)}
-        </select> */}
-        <button type="submit" disabled={isLoading || !query.trim()}>
-          Send
-        </button>
-      </form>
+      <ChatInput
+        query={query}
+        setQuery={setQuery}
+        handleSubmit={handleSubmit}
+        muted={muted}
+        setMuted={setMuted}
+        isLoading={isLoading}
+        transcribing={transcribing}
+        recordingAuto={recordingAuto}
+        recordingAppend={recordingAppend}
+        startRecording={startRecording}
+        stopRecording={stopRecording}
+      />
     </div>
   );
 };

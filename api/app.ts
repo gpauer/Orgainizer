@@ -5,7 +5,7 @@ import { OAuth2Client } from 'google-auth-library';
 import { GoogleGenAI } from '@google/genai';
 import axios from 'axios';
 import { createCalendarEvents, deleteCalendarEvent, deleteCalendarEventsBatch, getCalendarEvents, updateCalendarEvent } from './calendar';
-import { assistantQueryHandler, assistantRangeHandler, assistantStreamHandler, assistantTTSHandler, assistantTranscribeHandler, assistantTTSStreamHandler } from './assistantHandlers';
+import { assistantRangeHandler, assistantStreamHandler, assistantTTSHandler, assistantTranscribeHandler, assistantTTSStreamHandler } from './assistantHandlers';
 import { googleAuthUrlHandler, googleAuthCallbackHandler } from './authHandlers';
 import { requireValidTokenFactory } from './middleware';
 
@@ -55,10 +55,15 @@ export function createApp() {
   app.delete('/api/calendar/events/:id', requireValidToken, (req, res) => deleteCalendarEvent(req, res, oAuth2Client));
   app.post('/api/calendar/events/batch-delete', requireValidToken, (req, res) => deleteCalendarEventsBatch(req, res, oAuth2Client));
   
-  // Assistant
-  app.post('/api/assistant/query', requireValidToken, assistantQueryHandler(ai));
-  app.post('/api/assistant/range', requireValidToken, assistantRangeHandler(ai));
-  app.post('/api/assistant/stream', requireValidToken, assistantStreamHandler(ai));
+  // Assistant (inject user timezone if provided by client header or fallback to calendar locale offset)
+  app.post('/api/assistant/range', requireValidToken, (req, res, next) => {
+    (req as any).userTz = (req.headers['x-timezone'] as string) || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    next();
+  }, assistantRangeHandler(ai));
+  app.post('/api/assistant/stream', requireValidToken, (req, res, next) => {
+    (req as any).userTz = (req.headers['x-timezone'] as string) || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    next();
+  }, assistantStreamHandler(ai));
   app.post('/api/assistant/tts', requireValidToken, assistantTTSHandler(ai));
   app.post('/api/assistant/transcribe', requireValidToken, assistantTranscribeHandler(ai));
   app.post('/api/assistant/tts/stream', requireValidToken, assistantTTSStreamHandler(ai));
