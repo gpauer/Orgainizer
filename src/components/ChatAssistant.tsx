@@ -405,8 +405,22 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
                 if (match) id = match.id;
               }
               if (id) {
-                await api.delete(`/calendar/events/${id}`);
+                // Capture event details for undo before deletion
+                let deletedEvent: any = (eventsPayload as any[]).find(ev => ev.id === id);
+                try {
+                  await api.delete(`/calendar/events/${id}`);
+                } catch (delErr: any) {
+                  assistantText += `\n\n❌ Failed to delete event ${id}: ${delErr.message}`;
+                  applyAssistantText();
+                  return;
+                }
                 assistantText += `\n\n🗑 Deleted event ${id}`;
+                // Notify calendar to remove immediately & show undo
+                if (deletedEvent) {
+                  window.dispatchEvent(new CustomEvent('calendar:eventDeleted', { detail: { event: deletedEvent } }));
+                } else {
+                  window.dispatchEvent(new Event('calendar:refresh'));
+                }
               } else {
                 assistantText += `\n\n⚠ Could not resolve event to delete.`;
               }

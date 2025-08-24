@@ -84,11 +84,17 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
           raw: event
         }
       }));
-      setEvents(prev => {
-        const map = new Map(prev.map(e => [e.id, e] as const));
-        formattedEvents.forEach((ev: any) => map.set(ev.id, ev));
-        return Array.from(map.values());
-      });
+      if (!range) {
+        // Full fetch: replace so removed events disappear
+        setEvents(formattedEvents);
+      } else {
+        // Range fetch: merge
+        setEvents(prev => {
+          const map = new Map(prev.map(e => [e.id, e] as const));
+          formattedEvents.forEach((ev: any) => map.set(ev.id, ev));
+          return Array.from(map.values());
+        });
+      }
       if (range) {
         setLoadedWindow(prev => {
           if (!prev) return { start: range.start, end: range.end };
@@ -103,6 +109,59 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
       push({ type: 'error', message: 'Failed to load events' });
     }
   };
+
+  // Listen for external deletion events (e.g., ChatAssistant) to update UI & provide undo
+  useEffect(() => {
+    const handler = (e: any) => {
+      const ev = e?.detail?.event;
+      if (!ev || !ev.id) return;
+      // Remove immediately from UI
+      setEvents(prev => prev.filter(p => p.id !== ev.id));
+      let undone = false;
+      push({
+        type: 'success',
+        message: 'Event deleted',
+        actionLabel: 'Undo',
+        duration: 6000,
+        onAction: async () => {
+          if (undone) return; undone = true;
+          try {
+            const payload: any = {
+              summary: ev.summary,
+              description: ev.description,
+              location: ev.location,
+              start: ev.start?.dateTime ? { dateTime: ev.start.dateTime } : { date: ev.start?.date },
+              end: ev.end?.dateTime ? { dateTime: ev.end.dateTime } : { date: ev.end?.date },
+              attendees: (ev.attendees || []).map((a: any) => ({ email: a.email }))
+            };
+            const resp = await api.post('/calendar/events', payload);
+            const newEv = resp.data;
+            setEvents(prev => ([...prev, {
+              id: newEv.id,
+              title: newEv.summary,
+              start: newEv.start?.dateTime || newEv.start?.date,
+              end: newEv.end?.dateTime || newEv.end?.date,
+              allDay: !newEv.start?.dateTime,
+              extendedProps: {
+                description: newEv.description || '',
+                location: newEv.location || '',
+                organizer: newEv.organizer || null,
+                attendees: newEv.attendees || [],
+                raw: newEv
+              }
+            }]));
+            push({ type: 'info', message: 'Event restored' });
+            window.dispatchEvent(new Event('calendar:refresh'));
+          } catch (err) {
+            console.error('Undo failed', err);
+            push({ type: 'error', message: 'Failed to restore event' });
+          }
+        }
+      });
+    };
+    window.addEventListener('calendar:eventDeleted', handler as any);
+    return () => window.removeEventListener('calendar:eventDeleted', handler as any);
+  }, [push]);
 
   const handleDelete = async () => {
     if (!selectedEvent) return;
