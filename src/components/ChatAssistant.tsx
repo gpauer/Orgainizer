@@ -29,7 +29,8 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [geminiAudio, setGeminiAudio] = useState<Record<number, GeminiAudioState>>({});
   const [selectedVoice, setSelectedVoice] = useState('Kore');
-  const [muted, setMuted] = useState(false);
+  // Global tab mute state (persisted & broadcast via custom event)
+  const [muted, setMuted] = useState<boolean>(() => localStorage.getItem('tabMuted') === '1');
   // Recording / transcription state
   const [recordingAuto, setRecordingAuto] = useState(false);      // mic that auto sends after transcription
   const [recordingAppend, setRecordingAppend] = useState(false);  // mic that appends text to input only
@@ -98,6 +99,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
     : (process.env.REACT_APP_API_BASE || 'http://localhost:3001/api');
 
   async function streamGeminiTTS(index: number) {
+  if (muted) return; // skip streaming while globally muted
     const msg = conversation[index];
     if (!msg || msg.role !== 'assistant' || !msg.content.trim()) return;
     try {
@@ -186,6 +188,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
   }
 
   async function startStreamingSegment(index: number, text: string) {
+  if (muted) return; // don't start segment stream if muted
     try {
       // Mark loading state (streaming)
       setGeminiAudio(prev => ({ ...prev, [index]: { ...(prev[index]||{}), loading: true, autoplay: true } }));
@@ -247,19 +250,57 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
     });
   }, [geminiAudio, muted]);
 
-  // Apply mute/unmute to GainNode + existing <audio> elements
+  // Apply mute/unmute to ALL media elements in the tab + WebAudio
   useEffect(() => {
-    if (gainNodeRef.current) {
-      try { gainNodeRef.current.gain.setValueAtTime(muted ? 0 : 1, (audioCtxRef.current || ensureAudioCtx()).currentTime); } catch {/* ignore */}
-    }
-    Object.values(audioRefs.current).forEach(el => {
-      if (el) {
-        el.muted = muted;
-        if (!muted && el.autoplay && el.paused) {
-          el.play().catch(()=>{});
-        }
+    const apply = (flag: boolean) => {
+      // Persist
+      localStorage.setItem('tabMuted', flag ? '1' : '0');
+      // Media elements
+      document.querySelectorAll('audio,video').forEach(el => {
+        const m = el as HTMLMediaElement;
+        m.muted = flag;
+        if (flag) m.volume = 0; else if (m.volume === 0) m.volume = 1;
+      });
+      // Web Audio
+      if (gainNodeRef.current) {
+        try { gainNodeRef.current.gain.setValueAtTime(flag ? 0 : 1, (audioCtxRef.current || ensureAudioCtx()).currentTime); } catch {/* ignore */}
+      }
+      if (audioCtxRef.current) {
+        try { flag ? audioCtxRef.current.suspend() : audioCtxRef.current.resume(); } catch {/* ignore */}
+      }
+    };
+    apply(muted);
+    // Broadcast so other components (future) can react
+    window.dispatchEvent(new CustomEvent('app:tab-mute-changed', { detail: { muted } }));
+  }, [muted]);
+
+  // Listen for external mute changes (if some other component toggles)
+  useEffect(() => {
+    const handler = (e: any) => {
+      const v = !!e?.detail?.muted;
+      setMuted(prev => prev === v ? prev : v);
+    };
+    window.addEventListener('app:tab-mute-changed', handler);
+    return () => window.removeEventListener('app:tab-mute-changed', handler);
+  }, []);
+
+  // MutationObserver to auto-mute any newly inserted media elements when muted
+  useEffect(() => {
+    if (!muted) return; // only needed while muted
+    const obs = new MutationObserver(recs => {
+      if (!muted) return;
+      for (const r of recs) {
+        r.addedNodes.forEach(n => {
+          if (n instanceof HTMLMediaElement) {
+            n.muted = true; n.volume = 0;
+          } else if (n instanceof HTMLElement) {
+            n.querySelectorAll('audio,video').forEach(el => { (el as HTMLMediaElement).muted = true; (el as HTMLMediaElement).volume = 0; });
+          }
+        });
       }
     });
+    obs.observe(document.body, { childList: true, subtree: true });
+    return () => obs.disconnect();
   }, [muted]);
 
   // Cleanup any active speech on unmount
@@ -283,6 +324,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
   // Removed browser pause/resume/stop handlers
 
   const requestGeminiTTS = async (index: number, autoplay = false) => {
+  if (muted) return; // do not issue TTS requests while muted
     const msg = conversation[index];
     if (!msg || msg.role !== 'assistant' || !msg.content.trim()) return;
     setGeminiAudio(prev => ({ ...prev, [index]: { ...(prev[index]||{}), loading: true, error: undefined, autoplay } }));
@@ -740,7 +782,8 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
           onClick={() => setMuted(m => !m)}
           className="tts-btn"
           style={{ marginLeft: '0.5rem' }}
-          title={muted ? 'Unmute voice playback' : 'Mute voice playback'}
+          title={muted ? 'Unmute all tab audio' : 'Mute all tab audio'}
+          aria-pressed={muted}
         >{muted ? '🔇' : '🔊'}</button>
         {/* <select value={selectedVoice} onChange={e => setSelectedVoice(e.target.value)} disabled={isLoading} style={{ marginLeft: '0.5rem' }} title="Gemini TTS voice">
           {GEMINI_VOICES.map(v => <option key={v} value={v}>{v}</option>)}
