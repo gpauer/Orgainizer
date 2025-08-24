@@ -206,6 +206,7 @@ const Calendar: React.FC<CalendarProps> = ({ token }) => {
         ref={calendarRef}
         plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
         initialView="timeGridWeek"
+  nowIndicator={true}
         headerToolbar={{
           left: 'prev,next today',
           center: 'title',

@@ -46,12 +46,18 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
   // Keep refs of audio tags to invoke .play() programmatically (bypasses some autoplay quirks after user gesture)
   const audioRefs = useRef<Record<number, HTMLAudioElement | null>>({});
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
   const streamStateRef = useRef<{ playingIndex?: number; bufferQueue: Float32Array[]; source?: AudioBufferSourceNode; started?: boolean; scheduledTime?: number; } | null>(null);
   const fetchedRangesRef = useRef<{ start: Date; end: Date }[]>([]);
 
   function ensureAudioCtx() {
     if (!audioCtxRef.current) {
       audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    if (!gainNodeRef.current && audioCtxRef.current) {
+      gainNodeRef.current = audioCtxRef.current.createGain();
+      gainNodeRef.current.gain.value = muted ? 0 : 1;
+      gainNodeRef.current.connect(audioCtxRef.current.destination);
     }
     return audioCtxRef.current;
   }
@@ -76,6 +82,12 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
     const src = ctx.createBufferSource();
     src.buffer = audioBuffer;
     src.connect(ctx.destination);
+    try {
+      if (gainNodeRef.current) {
+        src.disconnect();
+        src.connect(gainNodeRef.current);
+      }
+    } catch { /* ignore */ }
     const startAt = Math.max(st.scheduledTime || ctx.currentTime, ctx.currentTime + 0.01);
     src.start(startAt);
     st.scheduledTime = startAt + audioBuffer.duration;
@@ -234,6 +246,21 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
       }
     });
   }, [geminiAudio, muted]);
+
+  // Apply mute/unmute to GainNode + existing <audio> elements
+  useEffect(() => {
+    if (gainNodeRef.current) {
+      try { gainNodeRef.current.gain.setValueAtTime(muted ? 0 : 1, (audioCtxRef.current || ensureAudioCtx()).currentTime); } catch {/* ignore */}
+    }
+    Object.values(audioRefs.current).forEach(el => {
+      if (el) {
+        el.muted = muted;
+        if (!muted && el.autoplay && el.paused) {
+          el.play().catch(()=>{});
+        }
+      }
+    });
+  }, [muted]);
 
   // Cleanup any active speech on unmount
   useEffect(() => { /* no-op cleanup retained for future */ }, []);
@@ -594,7 +621,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
                         src={geminiAudio[index].src}
                         style={{ maxWidth: '220px' }}
                         playsInline
-                        muted={false}
+                        muted={muted}
                         autoPlay={false}
                         onCanPlay={() => {
                           const meta = geminiAudio[index];
