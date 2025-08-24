@@ -29,7 +29,8 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [geminiAudio, setGeminiAudio] = useState<Record<number, GeminiAudioState>>({});
   const [selectedVoice, setSelectedVoice] = useState('Kore');
-  const [muted, setMuted] = useState(false);
+  // Global tab mute state (persisted & broadcast via custom event)
+  const [muted, setMuted] = useState<boolean>(() => localStorage.getItem('tabMuted') === '1');
   // Recording / transcription state
   const [recordingAuto, setRecordingAuto] = useState(false);      // mic that auto sends after transcription
   const [recordingAppend, setRecordingAppend] = useState(false);  // mic that appends text to input only
@@ -46,12 +47,18 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
   // Keep refs of audio tags to invoke .play() programmatically (bypasses some autoplay quirks after user gesture)
   const audioRefs = useRef<Record<number, HTMLAudioElement | null>>({});
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
   const streamStateRef = useRef<{ playingIndex?: number; bufferQueue: Float32Array[]; source?: AudioBufferSourceNode; started?: boolean; scheduledTime?: number; } | null>(null);
   const fetchedRangesRef = useRef<{ start: Date; end: Date }[]>([]);
 
   function ensureAudioCtx() {
     if (!audioCtxRef.current) {
       audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    if (!gainNodeRef.current && audioCtxRef.current) {
+      gainNodeRef.current = audioCtxRef.current.createGain();
+      gainNodeRef.current.gain.value = muted ? 0 : 1;
+      gainNodeRef.current.connect(audioCtxRef.current.destination);
     }
     return audioCtxRef.current;
   }
@@ -76,17 +83,28 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
     const src = ctx.createBufferSource();
     src.buffer = audioBuffer;
     src.connect(ctx.destination);
+    try {
+      if (gainNodeRef.current) {
+        src.disconnect();
+        src.connect(gainNodeRef.current);
+      }
+    } catch { /* ignore */ }
     const startAt = Math.max(st.scheduledTime || ctx.currentTime, ctx.currentTime + 0.01);
     src.start(startAt);
     st.scheduledTime = startAt + audioBuffer.duration;
   }
 
+  const API_ORIGIN = process.env.NODE_ENV === 'production'
+    ? '/api' // relative
+    : (process.env.REACT_APP_API_BASE || 'http://localhost:3001/api');
+
   async function streamGeminiTTS(index: number) {
+  if (muted) return; // skip streaming while globally muted
     const msg = conversation[index];
     if (!msg || msg.role !== 'assistant' || !msg.content.trim()) return;
     try {
       setGeminiAudio(prev => ({ ...prev, [index]: { ...(prev[index]||{}), loading: true, error: undefined, autoplay: true } }));
-      const resp = await fetch('http://localhost:3001/api/assistant/tts/stream', {
+  const resp = await fetch(`${API_ORIGIN}/assistant/tts/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', token },
         body: JSON.stringify({ text: stripMarkdown(msg.content).slice(0, 6000), voiceName: selectedVoice })
@@ -170,10 +188,11 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
   }
 
   async function startStreamingSegment(index: number, text: string) {
+  if (muted) return; // don't start segment stream if muted
     try {
       // Mark loading state (streaming)
       setGeminiAudio(prev => ({ ...prev, [index]: { ...(prev[index]||{}), loading: true, autoplay: true } }));
-      const resp = await fetch('http://localhost:3001/api/assistant/tts/stream', {
+  const resp = await fetch(`${API_ORIGIN}/assistant/tts/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', token },
         body: JSON.stringify({ text, voiceName: selectedVoice })
@@ -231,6 +250,59 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
     });
   }, [geminiAudio, muted]);
 
+  // Apply mute/unmute to ALL media elements in the tab + WebAudio
+  useEffect(() => {
+    const apply = (flag: boolean) => {
+      // Persist
+      localStorage.setItem('tabMuted', flag ? '1' : '0');
+      // Media elements
+      document.querySelectorAll('audio,video').forEach(el => {
+        const m = el as HTMLMediaElement;
+        m.muted = flag;
+        if (flag) m.volume = 0; else if (m.volume === 0) m.volume = 1;
+      });
+      // Web Audio
+      if (gainNodeRef.current) {
+        try { gainNodeRef.current.gain.setValueAtTime(flag ? 0 : 1, (audioCtxRef.current || ensureAudioCtx()).currentTime); } catch {/* ignore */}
+      }
+      if (audioCtxRef.current) {
+        try { flag ? audioCtxRef.current.suspend() : audioCtxRef.current.resume(); } catch {/* ignore */}
+      }
+    };
+    apply(muted);
+    // Broadcast so other components (future) can react
+    window.dispatchEvent(new CustomEvent('app:tab-mute-changed', { detail: { muted } }));
+  }, [muted]);
+
+  // Listen for external mute changes (if some other component toggles)
+  useEffect(() => {
+    const handler = (e: any) => {
+      const v = !!e?.detail?.muted;
+      setMuted(prev => prev === v ? prev : v);
+    };
+    window.addEventListener('app:tab-mute-changed', handler);
+    return () => window.removeEventListener('app:tab-mute-changed', handler);
+  }, []);
+
+  // MutationObserver to auto-mute any newly inserted media elements when muted
+  useEffect(() => {
+    if (!muted) return; // only needed while muted
+    const obs = new MutationObserver(recs => {
+      if (!muted) return;
+      for (const r of recs) {
+        r.addedNodes.forEach(n => {
+          if (n instanceof HTMLMediaElement) {
+            n.muted = true; n.volume = 0;
+          } else if (n instanceof HTMLElement) {
+            n.querySelectorAll('audio,video').forEach(el => { (el as HTMLMediaElement).muted = true; (el as HTMLMediaElement).volume = 0; });
+          }
+        });
+      }
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
+    return () => obs.disconnect();
+  }, [muted]);
+
   // Cleanup any active speech on unmount
   useEffect(() => { /* no-op cleanup retained for future */ }, []);
 
@@ -252,6 +324,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
   // Removed browser pause/resume/stop handlers
 
   const requestGeminiTTS = async (index: number, autoplay = false) => {
+  if (muted) return; // do not issue TTS requests while muted
     const msg = conversation[index];
     if (!msg || msg.role !== 'assistant' || !msg.content.trim()) return;
     setGeminiAudio(prev => ({ ...prev, [index]: { ...(prev[index]||{}), loading: true, error: undefined, autoplay } }));
@@ -325,7 +398,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
       }
       setConversation(prev => ([...prev, { role: 'assistant', content: '' }]));
       segmentStateRef.current = { processedChars: 0, lastEmit: Date.now() };
-      const resp = await fetch('http://localhost:3001/api/assistant/stream', {
+  const resp = await fetch(`${API_ORIGIN}/assistant/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', token },
         body: JSON.stringify({ query: text, events: eventsPayload, context: newConversation })
@@ -342,7 +415,46 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
         });
       };
       async function executeActions(actions: any[]) {
+        // Try to batch create events if multiple create_event actions present
+        const createPayload = actions.filter(a => a.action === 'create_event' && a.event).map(a => a.event);
+        if (createPayload.length > 1) {
+          try {
+            await api.post('/calendar/events', createPayload);
+            assistantText += `\n\n✅ Created ${createPayload.length} events.`;
+            window.dispatchEvent(new Event('calendar:refresh'));
+          } catch (err: any) {
+            assistantText += `\n\n❌ Failed batch create: ${err.message}`;
+          }
+        }
+        // Pre-resolve target ids for delete batch
+        const deleteTargets: string[] = [];
         for (const action of actions) {
+          if (action.action === 'delete_event') {
+            let id = action.target?.id;
+            if (!id) {
+              const events = eventsPayload as any[];
+              const match = events.find(ev => (
+                (action.target?.summary && ev.summary === action.target.summary) &&
+                (action.target?.start ? (ev.start?.dateTime || ev.start?.date) === action.target.start : true)
+              ));
+              if (match) id = match.id;
+            }
+            if (id) deleteTargets.push(id);
+          }
+        }
+        if (deleteTargets.length > 1) {
+          try {
+            await api.post('/calendar/events/batch-delete', { ids: deleteTargets });
+            assistantText += `\n\n🗑 Deleted ${deleteTargets.length} events.`;
+            window.dispatchEvent(new Event('calendar:refresh'));
+          } catch (err: any) {
+            assistantText += `\n\n❌ Failed batch delete: ${err.message}`;
+          }
+        }
+        for (const action of actions) {
+          if (action.action === 'delete_event' && deleteTargets.length > 1) continue; // already handled
+          // Skip individual create if already covered by batch
+          if (action.action === 'create_event' && createPayload.length > 1) continue;
           try {
             if (action.action === 'create_event' && action.event) {
               await api.post('/calendar/events', action.event);
@@ -374,8 +486,22 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
                 if (match) id = match.id;
               }
               if (id) {
-                await api.delete(`/calendar/events/${id}`);
+                // Capture event details for undo before deletion
+                let deletedEvent: any = (eventsPayload as any[]).find(ev => ev.id === id);
+                try {
+                  await api.delete(`/calendar/events/${id}`);
+                } catch (delErr: any) {
+                  assistantText += `\n\n❌ Failed to delete event ${id}: ${delErr.message}`;
+                  applyAssistantText();
+                  return;
+                }
                 assistantText += `\n\n🗑 Deleted event ${id}`;
+                // Notify calendar to remove immediately & show undo
+                if (deletedEvent) {
+                  window.dispatchEvent(new CustomEvent('calendar:eventDeleted', { detail: { event: deletedEvent } }));
+                } else {
+                  window.dispatchEvent(new Event('calendar:refresh'));
+                }
               } else {
                 assistantText += `\n\n⚠ Could not resolve event to delete.`;
               }
@@ -460,7 +586,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
           const blob = new Blob(recordedChunksRef.current, { type: 'audio/webm' });
           const arrayBuffer = await blob.arrayBuffer();
           const base64 = arrayBufferToBase64(arrayBuffer);
-          const resp = await fetch('http://localhost:3001/api/assistant/transcribe', {
+          const resp = await fetch(`${API_ORIGIN}/assistant/transcribe`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', token },
             body: JSON.stringify({ audio: base64, mimeType: 'audio/webm' })
@@ -590,7 +716,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
                         src={geminiAudio[index].src}
                         style={{ maxWidth: '220px' }}
                         playsInline
-                        muted={false}
+                        muted={muted}
                         autoPlay={false}
                         onCanPlay={() => {
                           const meta = geminiAudio[index];
@@ -639,28 +765,29 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ token }) => {
           title={recordingAuto ? 'Stop & transcribe (auto send)' : 'Hold a voice note (auto send after silence)'}
           onClick={() => recordingAuto ? stopRecording() : startRecording('auto')}
           style={{ marginLeft: '0.5rem' }}
-        >{recordingAuto ? '⏺️ Stop' : '🎙️ Send'}</button>
+        >{recordingAuto ? '⏺️' : '🎙️'}</button>
         {/* Append-only dictation mic */}
-        <button
+        {/* <button
           type="button"
           className="tts-btn"
           disabled={isLoading || transcribing || recordingAuto}
           title={recordingAppend ? 'Stop & transcribe (append to input)' : 'Dictate and append to text box'}
           onClick={() => recordingAppend ? stopRecording() : startRecording('append')}
           style={{ marginLeft: '0.25rem' }}
-        >{recordingAppend ? '⏺️ Add' : '🗣️ Dictate'}</button>
-        {transcribing && <span style={{ fontSize: '0.7rem', marginLeft: '0.3rem' }}>Transcribing...</span>}
+        >{recordingAppend ? '⏺️ Add' : '🗣️ Dictate'}</button> */}
+        {/* {transcribing && <span style={{ fontSize: '0.7rem', marginLeft: '0.3rem' }}>Transcribing...</span>} */}
   {/* Auto browser speech toggle removed */}
         <button
           type="button"
           onClick={() => setMuted(m => !m)}
           className="tts-btn"
           style={{ marginLeft: '0.5rem' }}
-          title={muted ? 'Unmute voice playback' : 'Mute voice playback'}
+          title={muted ? 'Unmute all tab audio' : 'Mute all tab audio'}
+          aria-pressed={muted}
         >{muted ? '🔇' : '🔊'}</button>
-        <select value={selectedVoice} onChange={e => setSelectedVoice(e.target.value)} disabled={isLoading} style={{ marginLeft: '0.5rem' }} title="Gemini TTS voice">
+        {/* <select value={selectedVoice} onChange={e => setSelectedVoice(e.target.value)} disabled={isLoading} style={{ marginLeft: '0.5rem' }} title="Gemini TTS voice">
           {GEMINI_VOICES.map(v => <option key={v} value={v}>{v}</option>)}
-        </select>
+        </select> */}
         <button type="submit" disabled={isLoading || !query.trim()}>
           Send
         </button>

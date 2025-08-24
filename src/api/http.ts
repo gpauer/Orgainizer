@@ -1,9 +1,12 @@
 import axios from 'axios';
 
 // Central axios instance with base URL and auth handling.
-const api = axios.create({
-  baseURL: 'http://localhost:3001/api'
-});
+// In Netlify (or any deployed env) we want relative '/api'; for local development keep explicit server port.
+const baseURL = process.env.NODE_ENV === 'production'
+  ? '/api'
+  : (process.env.REACT_APP_API_BASE || 'http://localhost:3001/api');
+
+const api = axios.create({ baseURL });
 
 api.interceptors.request.use(config => {
   const token = localStorage.getItem('token');
