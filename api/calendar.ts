@@ -91,34 +91,6 @@ export const createCalendarEvents = async (req: Request, res: Response, oAuth2Cl
       return res.status(400).json({ error: 'summary, start, and end are required' });
     }
 
-    function normalizeDatePart(part: any, label: string) {
-      if (!part) throw new Error(`Missing ${label}`);
-      // Accept string shorthand
-      if (typeof part === 'string') {
-        if (/^\d{4}-\d{2}-\d{2}$/.test(part)) return { date: part }; // all-day
-        // dateTime optionally with timezone
-        part = { dateTime: part };
-      }
-      if (part.date && !/^\d{4}-\d{2}-\d{2}$/.test(part.date)) {
-        throw new Error(`${label}.date must be YYYY-MM-DD`);
-      }
-      if (part.dateTime) {
-        // If no timezone offset/Z and no explicit timeZone property, append Z (UTC)
-        if (!part.timeZone && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(part.dateTime)) {
-          part.dateTime += 'Z';
-        }
-      }
-      return part;
-    }
-
-    let normStart: any;
-    let normEnd: any;
-    try {
-      normStart = normalizeDatePart(start, 'start');
-      normEnd = normalizeDatePart(end, 'end');
-    } catch (e: any) {
-      return res.status(400).json({ error: e.message });
-    }
 
     const calendar = google.calendar({ version: 'v3', auth: oAuth2Client });
   const created = await calendar.events.insert({
@@ -127,8 +99,8 @@ export const createCalendarEvents = async (req: Request, res: Response, oAuth2Cl
         summary,
         description,
         location,
-    start: normStart,
-    end: normEnd,
+    start: {dateTime: start.dateTime, date: start.date, timeZone: start.timeZone ?? 'Africa/Johannesburg'},
+    end: {dateTime: end.dateTime, date: end.date, timeZone: end.timeZone ?? 'Africa/Johannesburg'},
         attendees
       }
     });
@@ -163,22 +135,18 @@ export const updateCalendarEvent = async (req: Request, res: Response, oAuth2Cli
     const { id } = req.params;
     const { summary, description, location, start, end, attendees } = req.body as any;
     if (!id) return res.status(400).json({ error: 'Missing event id' });
-    function normalize(part: any) {
-      if (!part) return part;
-      if (typeof part === 'string') {
-        if (/^\d{4}-\d{2}-\d{2}$/.test(part)) return { date: part };
-        part = { dateTime: part };
-      }
-      if (part.dateTime && !part.timeZone && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(part.dateTime)) part.dateTime += 'Z';
-      return part;
-    }
-    const normStart = normalize(start);
-    const normEnd = normalize(end);
     const calendar = google.calendar({ version: 'v3', auth: oAuth2Client });
     const updated = await calendar.events.patch({
       calendarId: 'primary',
       eventId: id,
-      requestBody: { summary, description, location, start: normStart, end: normEnd, attendees }
+      requestBody: { 
+        summary, 
+        description, 
+        location, 
+        start: {dateTime: start.dateTime, date: start.date, timeZone: start.timeZone ?? 'Africa/Johannesburg'},
+        end: {dateTime: end.dateTime, date: end.date, timeZone: end.timeZone ?? 'Africa/Johannesburg'},
+        attendees 
+      }
     });
     res.json(updated.data);
   } catch (error: any) {
